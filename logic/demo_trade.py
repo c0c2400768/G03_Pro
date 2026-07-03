@@ -1,12 +1,62 @@
+"""岩間担当：デモトレード計算処理（logic/demo_trade.py）"""
+
 from __future__ import annotations
 
 import pandas as pd
 
-RESULT_COLUMNS = [
-    "Action", "Horizon", "AvgReturn", "WinRate", "MaxLoss", "MaxDrawdown", "AvgHoldDays",
-]
+RESULT_COLUMNS = ["Action", "Horizon", "AvgReturn", "WinRate", "MaxLoss", "MaxDrawdown", "AvgHoldDays"]
 
-VALID_ACTIONS = {"buy", "sell"}  # buy=買い（ロング）, sell=空売り（ショート）
+HOLDING_ACTIONS = ["hold", "sell", "partial_sell", "add", "stop_loss"]
+NEW_ACTIONS = ["buy_today", "wait", "split_buy", "skip"]
+
+ACTION_LABELS = {
+    "hold": "保有継続", "sell": "売却", "partial_sell": "一部売却",
+    "add": "追加購入", "stop_loss": "損切り設定",
+    "buy_today": "当日購入", "wait": "待機", "split_buy": "分割購入", "skip": "見送り",
+}
+
+
+def _simulate(action: str, window: pd.Series, wait_days: int, stop_loss_pct: float) -> dict | None:
+    """1回の取引を評価する。windowはentry日を0番目とした終値の系列。"""
+    entry = window.iloc[0]
+    horizon = len(window) - 1
+    if horizon < 1 or entry == 0:
+        return None
+
+    if action in ("hold", "add", "buy_today"):
+        exit_p = window.iloc[-1]
+        return {"ret": (exit_p - entry) / entry, "dd": (window.min() - entry) / entry, "hold_days": horizon}
+
+    if action in ("sell", "skip"):
+        return {"ret": 0.0, "dd": 0.0, "hold_days": 0}
+
+    if action == "partial_sell":
+        exit_p = window.iloc[-1]
+        return {"ret": 0.5 * (exit_p - entry) / entry, "dd": 0.5 * (window.min() - entry) / entry, "hold_days": horizon}
+
+    if action == "stop_loss":
+        threshold = entry * (1 - stop_loss_pct)
+        for i, p in enumerate(window):
+            if p <= threshold:
+                return {"ret": -stop_loss_pct, "dd": -stop_loss_pct, "hold_days": i}
+        exit_p = window.iloc[-1]
+        return {"ret": (exit_p - entry) / entry, "dd": (window.min() - entry) / entry, "hold_days": horizon}
+
+    if action == "wait":
+        wd = min(wait_days, horizon - 1)
+        if wd < 1:
+            return None
+        buy_p = window.iloc[wd]
+        sub = window.iloc[wd:]
+        return {"ret": (sub.iloc[-1] - buy_p) / buy_p, "dd": (sub.min() - buy_p) / buy_p, "hold_days": horizon - wd}
+
+    if action == "split_buy":
+        idxs = sorted(set([0, horizon // 2, horizon]))
+        avg_cost = sum(window.iloc[i] for i in idxs) / len(idxs)
+        exit_p = window.iloc[-1]
+        return {"ret": (exit_p - avg_cost) / avg_cost, "dd": (window.min() - avg_cost) / avg_cost, "hold_days": horizon}
+
+    return None
 
 
 def calc_demo_trade(
@@ -14,45 +64,26 @@ def calc_demo_trade(
     price_df: pd.DataFrame,
     actions: list[str],
     horizons: list[int] | None = None,
+    wait_days: int = 5,
+    stop_loss_pct: float = 0.05,
 ) -> pd.DataFrame:
-    """類似局面の各日付を起点に、指定した投資行動・保有日数でのデモ売買成績を集計して返す。
-
-    Args:
-        similar_df: extract_similar_periodsの出力（Date列を含む）。
-        price_df: get_stock_dataの出力（Date, Closeを含む）。
-        actions: シミュレートする投資行動のリスト。"buy"（買い）または"sell"（空売り）。
-        horizons: 保有日数（営業日数）のリスト。未指定時は[5, 10, 20]。
-
-    Returns:
-        Action, Horizon, AvgReturn, WinRate, MaxLoss, MaxDrawdown, AvgHoldDays列を持つDataFrame。
-        有効な取引が1件もない組み合わせは結果から除外される。
-    """
+    """類似局面の各日付を起点に、投資行動ごとのデモ売買成績を集計して返す。"""
     if horizons is None:
         horizons = [5, 10, 20]
 
-    empty_result = pd.DataFrame(columns=RESULT_COLUMNS)
-
-    if similar_df is None or similar_df.empty:
-        return empty_result
-    if price_df is None or price_df.empty:
-        return empty_result
+    empty = pd.DataFrame(columns=RESULT_COLUMNS)
+    if similar_df is None or similar_df.empty or price_df is None or price_df.empty:
+        return empty
     if "Date" not in similar_df.columns or not {"Date", "Close"}.issubset(price_df.columns):
-        return empty_result
+        return empty
 
     price = price_df.reset_index(drop=True).copy()
     price["Date"] = price["Date"].astype(str)
-
     rows = []
 
     for action in actions:
-        if action not in VALID_ACTIONS:
-            continue  # 未定義のactionは無視する（例外は投げない）
-
         for horizon in horizons:
-            returns = []
-            drawdowns = []
-            hold_days = []
-
+            rets, dds, holds = [], [], []
             for date in similar_df["Date"].astype(str):
                 matches = price.index[price["Date"] == date]
                 if len(matches) == 0:
@@ -60,42 +91,22 @@ def calc_demo_trade(
                 entry_idx = matches[0]
                 exit_idx = entry_idx + horizon
                 if exit_idx >= len(price):
-                    continue  # 保有期間分の未来データが足りない場合はスキップ
-
-                entry_price = price.loc[entry_idx, "Close"]
-                exit_price = price.loc[exit_idx, "Close"]
-                window = price.loc[entry_idx:exit_idx, "Close"]
-
-                if entry_price == 0:
                     continue
+                window = price.loc[entry_idx:exit_idx, "Close"]
+                trade = _simulate(action, window, wait_days, stop_loss_pct)
+                if trade is None:
+                    continue
+                rets.append(trade["ret"])
+                dds.append(trade["dd"])
+                holds.append(trade["hold_days"])
 
-                if action == "buy":
-                    ret = (exit_price - entry_price) / entry_price
-                    drawdown = (window.min() - entry_price) / entry_price
-                else:  # sell（空売り）
-                    ret = (entry_price - exit_price) / entry_price
-                    drawdown = (entry_price - window.max()) / entry_price
-
-                returns.append(ret)
-                drawdowns.append(drawdown)
-                hold_days.append(horizon)
-
-            if not returns:
-                continue  # 有効な取引がない組み合わせは結果に含めない
-
-            returns_series = pd.Series(returns)
-
+            if not rets:
+                continue
+            r = pd.Series(rets)
             rows.append({
-                "Action": action,
-                "Horizon": horizon,
-                "AvgReturn": returns_series.mean(),
-                "WinRate": (returns_series > 0).mean(),
-                "MaxLoss": returns_series.min(),
-                "MaxDrawdown": min(drawdowns),
-                "AvgHoldDays": sum(hold_days) / len(hold_days),
+                "Action": action, "Horizon": horizon,
+                "AvgReturn": r.mean(), "WinRate": (r > 0).mean(),
+                "MaxLoss": r.min(), "MaxDrawdown": min(dds), "AvgHoldDays": sum(holds) / len(holds),
             })
 
-    if not rows:
-        return empty_result
-
-    return pd.DataFrame(rows, columns=RESULT_COLUMNS)
+    return pd.DataFrame(rows, columns=RESULT_COLUMNS) if rows else empty

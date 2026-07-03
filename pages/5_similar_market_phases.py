@@ -7,8 +7,8 @@ from logic.error_utils import show_error, show_warning
 st.title("過去類似局面")
 
 # 太刀岡担当ページから受け渡される想定のsession_state（キー名は要すり合わせ）
-ticker = st.session_state.get("data_selected_ticker")
-price_df = st.session_state.get("data_stock_price_df")
+ticker = st.session_state.get("selected_ticker")
+price_df = st.session_state.get("stock_price_df")
 
 if not ticker or price_df is None or price_df.empty:
     show_warning("銘柄が選択されていません。トップ画面で銘柄を選択してください。")

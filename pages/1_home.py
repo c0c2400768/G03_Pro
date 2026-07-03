@@ -143,12 +143,15 @@ with tab_chart:
     if norm_stock.empty:
         show_error("正規化に失敗しました。基準日を変更して再度お試しください。")
     else:
+        st.session_state["normalized_stock_df"] = norm_stock  # ← 追加
+
         chart_df = norm_stock.rename(
             columns={"Normalized": st.session_state.get("selected_ticker", "銘柄")}
         ).set_index("Date")
         if index_df is not None and not index_df.empty:
             norm_index = normalize_to_100(index_df, base_date)
             if not norm_index.empty:
+                st.session_state["normalized_index_df"] = norm_index  # ← 追加
                 chart_df = chart_df.join(
                     norm_index.rename(columns={"Normalized": "日経平均"}).set_index("Date"),
                     how="left",
