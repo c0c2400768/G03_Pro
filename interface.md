@@ -120,13 +120,13 @@ rsi_df = calc_rsi(df)
 project/
 ├── app.py                     # エントリポイント（サイドバー等）
 ├── pages/
-│   ├── 1_トップ.py             # 太刀岡
-│   ├── 2_サマリー.py           # 山﨑
-│   ├── 3_株価チャート.py       # 山﨑
-│   ├── 4_複数指標分析.py       # 及川
-│   ├── 5_過去類似局面.py       # 岩間
-│   ├── 6_デモトレード結果.py   # 岩間
-│   └── 7_補助判断.py           # 相川
+│──  1_home.py                         # 太刀岡
+├── 2_summary.py                      # 山﨑
+├── 3_stock_chart.py                  # 山﨑
+├── 4_multi_indicator_analysis.py     # 及川
+├── 5_similar_market_phases.py        # 岩間
+├── 6_demo_trading_results.py         # 岩間
+└── 7_decision_support.py           # 相川
 ├── logic/
 │   ├── data_fetch.py           # 太刀岡：取得・正規化
 │   ├── indicators.py           # 及川：RSI/BB/HV/出来高倍率/乖離率
