@@ -15,17 +15,10 @@ from datetime import date, timedelta
 
 import streamlit as st
 
+from logic.comparison import select_comparison_targets
 from logic.data_fetch import get_index_data, get_stock_data, normalize_to_100
-
-try:
-    from logic.error_utils import show_error, show_warning
-except ImportError:  # pragma: no cover - フェーズ1の並行開発用の暫定措置
-
-    def show_error(msg: str) -> None:
-        st.error(msg)
-
-    def show_warning(msg: str) -> None:
-        st.warning(msg)
+from logic.error_utils import show_error, show_warning
+from logic.ticker_lookup import get_company_name, list_tickers
 
 
 st.set_page_config(page_title="トップ | 株価分析", layout="wide")
@@ -34,10 +27,22 @@ st.title("トップ：銘柄選択とデータ取得")
 col_ticker, col_period, col_stance = st.columns([1.2, 1, 1])
 
 with col_ticker:
-    ticker = st.text_input(
-        "銘柄コード（yfinance形式）",
-        value=st.session_state.get("selected_ticker", "7203.T"),
-        help="東証銘柄は「証券コード.T」の形式（例：7203.T）",
+    tickers = list_tickers()
+    if not tickers:
+        show_error("銘柄マスタ（data/data_j.xls）を読み込めませんでした。")
+        st.stop()
+
+    ticker_options = [t["ticker"] for t in tickers]
+    ticker_labels = {t["ticker"]: f"{t['name']}（{t['code']}）" for t in tickers}
+    default_ticker = st.session_state.get("selected_ticker", "7203.T")
+    default_index = ticker_options.index(default_ticker) if default_ticker in ticker_options else 0
+
+    ticker = st.selectbox(
+        "銘柄選択（銘柄名またはコードで検索）",
+        options=ticker_options,
+        index=default_index,
+        format_func=lambda t: ticker_labels.get(t, t),
+        help="銘柄名の一部またはコードを入力すると絞り込めます",
     )
 
 with col_period:
@@ -61,10 +66,8 @@ with col_stance:
 st.divider()
 
 if st.button("分析開始", type="primary"):
-    ticker_clean = ticker.strip()
-    if not ticker_clean:
-        show_error("銘柄コードを入力してください。")
-    elif period_choice == "任意" and custom_start >= custom_end:
+    ticker_clean = ticker
+    if period_choice == "任意" and custom_start >= custom_end:
         show_error("開始日は終了日より前の日付を指定してください。")
     else:
         with st.spinner("株価データを取得中..."):
@@ -93,8 +96,8 @@ if st.button("分析開始", type="primary"):
 
         if stock_df.empty:
             show_error(
-                f"銘柄「{ticker_clean}」の株価データを取得できませんでした。"
-                "銘柄コードと通信環境を確認してください。"
+                f"銘柄「{get_company_name(ticker_clean)}」の株価データを取得できませんでした。"
+                "通信環境を確認してください。"
             )
         else:
             st.session_state["selected_ticker"] = ticker_clean
@@ -108,7 +111,10 @@ if st.button("分析開始", type="primary"):
                     "日経平均（^N225）の取得に失敗しました。"
                     "株価単体の分析は可能ですが、乖離率などの比較機能は使えません。"
                 )
-            st.success(f"{ticker_clean} のデータを取得しました（{len(stock_df)}営業日分、{stance}）。")
+            st.success(
+                f"{get_company_name(ticker_clean)} のデータを取得しました"
+                f"（{len(stock_df)}営業日分、{stance}）。"
+            )
 
 stock_df = st.session_state.get("stock_price_df")
 index_df = st.session_state.get("index_price_df")
@@ -120,7 +126,7 @@ if not st.session_state.get("analysis_started") or stock_df is None or stock_df.
 tab_overview, tab_chart, tab_data = st.tabs(["概要", "基準日100正規化チャート", "取得データ"])
 
 with tab_overview:
-    st.subheader(f"取得結果：{st.session_state.get('selected_ticker', '')}")
+    st.subheader(f"取得結果：{get_company_name(st.session_state.get('selected_ticker', ''))}")
     col_a, col_b, col_c = st.columns(3)
     latest = stock_df.iloc[-1]
     col_a.metric("最新日付", latest["Date"])
@@ -131,10 +137,13 @@ with tab_overview:
 with tab_chart:
     st.subheader("基準日100正規化チャート（対 日経平均）")
     date_options = stock_df["Date"].tolist()
+    if st.session_state.get("normalize_base_date_slider") not in date_options:
+        # 銘柄切り替えで日付範囲が変わり、前回の基準日が選べなくなった場合はリセットする
+        st.session_state["normalize_base_date_slider"] = date_options[0]
+
     base_date = st.select_slider(
         "基準日（この日を100として指数化）",
         options=date_options,
-        value=st.session_state.get("normalize_base_date", date_options[0]),
         key="normalize_base_date_slider",
     )
     st.session_state["normalize_base_date"] = base_date
@@ -146,7 +155,7 @@ with tab_chart:
         st.session_state["normalized_stock_df"] = norm_stock  # ← 追加
 
         chart_df = norm_stock.rename(
-            columns={"Normalized": st.session_state.get("selected_ticker", "銘柄")}
+            columns={"Normalized": get_company_name(st.session_state.get("selected_ticker", "")) or "銘柄"}
         ).set_index("Date")
         if index_df is not None and not index_df.empty:
             norm_index = normalize_to_100(index_df, base_date)
@@ -156,6 +165,33 @@ with tab_chart:
                     norm_index.rename(columns={"Normalized": "日経平均"}).set_index("Date"),
                     how="left",
                 )
+
+        peers = select_comparison_targets(st.session_state.get("selected_ticker", "")).get("peers", [])
+        with st.expander("同業他社と比較"):
+            if not peers:
+                st.info("同業他社データがありません。")
+            else:
+                selected_peers = st.multiselect(
+                    "比較する同業他社",
+                    options=peers,
+                    default=peers,
+                    format_func=get_company_name,
+                    key="comparison_peers_selected",
+                )
+                peer_period = st.session_state.get("selected_period", "3年")
+                peer_fetch_period = "10年" if peer_period == "任意" else peer_period
+                for peer_ticker in selected_peers:
+                    peer_df = get_stock_data(peer_ticker, peer_fetch_period)
+                    if peer_df.empty:
+                        continue
+                    norm_peer = normalize_to_100(peer_df, base_date)
+                    if norm_peer.empty:
+                        continue
+                    chart_df = chart_df.join(
+                        norm_peer.rename(columns={"Normalized": get_company_name(peer_ticker)}).set_index("Date"),
+                        how="left",
+                    )
+
         st.line_chart(chart_df)
         st.caption(
             "基準日を100とした相対パフォーマンス。"

@@ -7,12 +7,8 @@
 import streamlit as st
 import plotly.graph_objects as go
 
-try:
-    from logic.error_utils import show_warning
-except ImportError:  # pragma: no cover - 相川さんの実装が未マージの間の暫定措置
-
-    def show_warning(msg: str) -> None:
-        st.warning(msg)
+from logic.error_utils import show_warning
+from logic.ticker_lookup import get_company_name
 
 
 st.title("株価チャート")
@@ -24,7 +20,7 @@ if stock_df is None or stock_df.empty:
     show_warning("データが取得されていません。トップ画面で銘柄を選択してください。")
     st.stop()
 
-st.subheader(f"{ticker} ローソク足チャート")
+st.subheader(f"{get_company_name(ticker)} ローソク足チャート")
 
 fig = go.Figure(data=[
     go.Candlestick(

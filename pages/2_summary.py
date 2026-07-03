@@ -7,13 +7,8 @@
 import streamlit as st
 
 from logic.indicators import calc_rsi, calc_bollinger, calc_bb_position, calc_hv, calc_volume_ratio
-
-try:
-    from logic.error_utils import show_warning
-except ImportError:  # pragma: no cover - 相川さんの実装が未マージの間の暫定措置
-
-    def show_warning(msg: str) -> None:
-        st.warning(msg)
+from logic.error_utils import show_warning
+from logic.ticker_lookup import get_company_name
 
 
 st.title("サマリー")
@@ -28,7 +23,7 @@ if stock_df is None or stock_df.empty:
 latest = stock_df.iloc[-1]
 prev = stock_df.iloc[-2] if len(stock_df) >= 2 else None
 
-st.subheader(f"{ticker} の概況")
+st.subheader(f"{get_company_name(ticker)} の概況")
 
 col1, col2, col3 = st.columns(3)
 col1.metric("最新終値", f"{latest['Close']:,.1f}")

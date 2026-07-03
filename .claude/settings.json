@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(logic/**)",
+      "Edit(pages/**)",
+      "Write(data/**)",
+      "Bash(streamlit run *)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(git push*)"
+    ]
+  }
+}

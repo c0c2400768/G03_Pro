@@ -29,7 +29,6 @@
 """
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
@@ -43,6 +42,7 @@ from logic.indicators import (
     calc_deviation,
 )
 from logic.error_utils import show_error, show_warning
+from logic.ticker_lookup import get_company_name
 
 
 st.set_page_config(page_title="複数指標分析", page_icon="🧮", layout="wide")
@@ -167,7 +167,7 @@ if price_df is None or price_df.empty:
     show_error("株価データがありません。トップ画面で銘柄を選択し、分析を実行してください。")
     st.stop()
 
-st.caption(f"対象銘柄：{ticker}")
+st.caption(f"対象銘柄：{get_company_name(ticker)}")
 
 # =====================================================================
 # 指標の計算（1つ失敗しても他は続行する）

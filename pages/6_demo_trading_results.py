@@ -1,7 +1,6 @@
 """岩間担当：デモトレード結果詳細画面（pages/6_demo_trading_results.py）"""
 
 import streamlit as st
-import pandas as pd
 
 from logic.demo_trade import calc_demo_trade, HOLDING_ACTIONS, NEW_ACTIONS, ACTION_LABELS
 from logic.error_utils import show_error, show_warning
@@ -32,6 +31,7 @@ st.caption(f"立場：{stance}")
 actions = HOLDING_ACTIONS if stance == "すでに保有している" else NEW_ACTIONS
 
 result_df = calc_demo_trade(similar_df, price_df, actions, [5, 10, 20])
+st.session_state["demo_trade_result_df"] = result_df  # 補助判断画面へ受け渡し用（空でも上書きする）
 
 st.subheader("結果一覧")
 if result_df.empty:
@@ -47,8 +47,6 @@ display_df["勝率"] = display_df["勝率"].map(lambda x: f"{x:.1%}")
 display_df["最大損失"] = display_df["最大損失"].map(lambda x: f"{x:+.2%}")
 display_df["最大ドローダウン"] = display_df["最大ドローダウン"].map(lambda x: f"{x:+.2%}")
 display_df["平均保有日数"] = display_df["平均保有日数"].map(lambda x: f"{x:.1f}日")
-
-st.session_state["demo_trade_result_df"] = result_df
 
 st.dataframe(display_df, use_container_width=True, hide_index=True)
 st.caption(f"{len(result_df)}パターンの結果を表示しています。")
