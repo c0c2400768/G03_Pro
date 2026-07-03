@@ -17,6 +17,7 @@ import streamlit as st
 
 from logic.comparison import select_comparison_targets
 from logic.data_fetch import get_index_data, get_stock_data, normalize_to_100
+from logic.demo_trade import resolve_entry_price
 from logic.error_utils import show_error, show_warning
 from logic.ticker_lookup import get_company_name, list_tickers
 
@@ -63,12 +64,24 @@ with col_stance:
     default_stance = st.session_state.get("investment_stance", stance_options[0])
     stance = st.radio("立場", stance_options, index=stance_options.index(default_stance))
 
+    purchase_date = None
+    if stance == "すでに保有している":
+        # 取得価格はユーザーごとに異なるため、購入日から都度取得する（固定値は持たない）
+        purchase_date = st.date_input(
+            "購入日",
+            value=None,
+            max_value=date.today(),
+            help="保有株を購入した日付。この日の終値を取得価格として使用します。",
+        )
+
 st.divider()
 
 if st.button("分析開始", type="primary"):
     ticker_clean = ticker
     if period_choice == "任意" and custom_start >= custom_end:
         show_error("開始日は終了日より前の日付を指定してください。")
+    elif stance == "すでに保有している" and purchase_date is None:
+        show_error("「すでに保有している」を選択した場合は、購入日を入力してください。")
     else:
         with st.spinner("株価データを取得中..."):
             if period_choice == "任意":
@@ -106,6 +119,27 @@ if st.button("分析開始", type="primary"):
             st.session_state["index_price_df"] = index_df
             st.session_state["investment_stance"] = stance
             st.session_state["analysis_started"] = True
+
+            if stance == "すでに保有している":
+                purchase_price = resolve_entry_price(stock_df, str(purchase_date))
+                st.session_state["purchase_date"] = str(purchase_date)
+                st.session_state["purchase_price"] = purchase_price
+                if purchase_price is None:
+                    show_warning(
+                        f"購入日（{purchase_date}）時点の株価データが見つかりませんでした。"
+                        "デモトレード結果画面で「売却」の結果は算出されません。"
+                    )
+                elif str(purchase_date) < stock_df["Date"].min():
+                    show_warning(
+                        f"購入日（{purchase_date}）が分析期間より前のため、"
+                        f"取得価格は分析期間内で最も古い日（{stock_df['Date'].min()}）の"
+                        "終値で代用しています。より正確にするには分析期間を広げてください。"
+                    )
+            else:
+                # 「これから購入する」に切り替えた場合は前回の購入情報を持ち越さない
+                st.session_state["purchase_date"] = None
+                st.session_state["purchase_price"] = None
+
             if index_df.empty:
                 show_warning(
                     "日経平均（^N225）の取得に失敗しました。"
@@ -133,6 +167,14 @@ with tab_overview:
     col_b.metric("最新終値", f"{latest['Close']:,.1f}")
     col_c.metric("データ件数", f"{len(stock_df)} 営業日")
     st.caption(f"立場：{st.session_state.get('investment_stance', '')}")
+
+    if st.session_state.get("investment_stance") == "すでに保有している":
+        purchase_price = st.session_state.get("purchase_price")
+        if purchase_price is not None:
+            st.metric(
+                f"取得価格（購入日：{st.session_state.get('purchase_date', '')}）",
+                f"{purchase_price:,.1f}",
+            )
 
 with tab_chart:
     st.subheader("基準日100正規化チャート（対 日経平均）")

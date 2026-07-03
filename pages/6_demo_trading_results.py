@@ -30,7 +30,8 @@ st.caption(f"立場：{stance}")
 
 actions = HOLDING_ACTIONS if stance == "すでに保有している" else NEW_ACTIONS
 
-result_df = calc_demo_trade(similar_df, price_df, actions, [5, 10, 20])
+buy_date = st.session_state.get("purchase_date")
+result_df = calc_demo_trade(similar_df, price_df, actions, [5, 10, 20], buy_date=buy_date)
 st.session_state["demo_trade_result_df"] = result_df  # 補助判断画面へ受け渡し用（空でも上書きする）
 
 st.subheader("結果一覧")
