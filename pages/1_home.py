@@ -177,7 +177,7 @@ with tab_overview:
             )
 
 with tab_chart:
-    st.subheader("基準日100正規化チャート（対 日経平均）")
+    st.subheader("基準日100正規化チャート")
     date_options = stock_df["Date"].tolist()
     if st.session_state.get("normalize_base_date_slider") not in date_options:
         # 銘柄切り替えで日付範囲が変わり、前回の基準日が選べなくなった場合はリセットする

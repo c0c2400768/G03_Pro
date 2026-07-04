@@ -4,8 +4,12 @@
       "Read(**)",
       "Edit(logic/**)",
       "Edit(pages/**)",
+      "Write(logic/**)",
+      "Write(pages/**)",
       "Write(data/**)",
-      "Bash(streamlit run *)"
+      "Bash(streamlit run *)",
+      "Bash(python *)",
+      "Bash(pytest *)"
     ],
     "ask": [
       "Bash(rm *)",
