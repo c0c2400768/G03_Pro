@@ -14,10 +14,6 @@ import pandas as pd
 RISK_LOW_THRESHOLD = 0.03
 RISK_HIGH_THRESHOLD = 0.06
 
-# 業種横断検証（新規実装2）のp値がこの値以上の場合、統計的有意性が確認できていない
-# とみなし、判定ロジックの最終段階で「推奨」を「検討可」に抑える安全装置の閾値
-PEER_PVALUE_SIGNIFICANCE_THRESHOLD = 0.05
-
 RATING_RECOMMENDED = "推奨"
 RATING_CONSIDERABLE = "検討可"
 RATING_NOT_RECOMMENDED = "非推奨"
@@ -71,21 +67,49 @@ def score_to_rating(score: int) -> str:
     return RATING_NOT_RECOMMENDED
 
 
-def apply_peer_significance_cap(rating: str, peer_p_value: float | None) -> str:
-    """業種横断検証のp値が有意水準未満でない場合、「推奨」を「検討可」に抑える安全装置。
+def _same_sign(a: float, b: float) -> bool:
+    """2つの値が両方プラス、または両方マイナスの場合にTrue（0はどちらとも一致しない）。"""
+    return (a > 0 and b > 0) or (a < 0 and b < 0)
 
-    統計的有意性が確認できていない状態で「推奨」を表示すると、初心者ユーザーが
-    誤って信頼してしまうリスクがあるため、判定ロジックの最終段階で必ず適用する。
+
+def apply_significance_cap(
+    rating: str,
+    single_stock_hit_rate: float | None,
+    single_stock_avg_return: float | None,
+    single_stock_insufficient_sample: bool,
+    peer_avg_return: float | None,
+) -> str:
+    """単体銘柄の的中率・方向一致が確認できない場合、「推奨」を「検討可」に抑える安全装置。
+
+    単体銘柄検証がサンプル不足の場合や、的中率が50%を上回らない場合、あるいは
+    単体銘柄とpeer平均の値動きの方向（符号）が一致しない場合に「推奨」を表示すると、
+    初心者ユーザーが誤って信頼してしまうリスクがあるため、判定ロジックの最終段階で必ず適用する。
     """
     if rating != RATING_RECOMMENDED:
         return rating
-    if peer_p_value is None or peer_p_value >= PEER_PVALUE_SIGNIFICANCE_THRESHOLD:
+    if single_stock_insufficient_sample:
         return RATING_CONSIDERABLE
-    return rating
+
+    hit_rate_ok = single_stock_hit_rate is not None and single_stock_hit_rate > 0.5
+    direction_ok = (
+        single_stock_avg_return is not None
+        and peer_avg_return is not None
+        and _same_sign(single_stock_avg_return, peer_avg_return)
+    )
+    if hit_rate_ok and direction_ok:
+        return rating
+    return RATING_CONSIDERABLE
 
 
 def rate_action_row(
-    action: str, avg_return: float, win_rate: float, max_drawdown: float, peer_p_value: float | None
+    action: str,
+    avg_return: float,
+    win_rate: float,
+    max_drawdown: float,
+    single_stock_hit_rate: float | None,
+    single_stock_avg_return: float | None,
+    single_stock_insufficient_sample: bool,
+    peer_avg_return: float | None,
 ) -> dict:
     """1つの(Action, Horizon)行に対する判定結果（RiskLevel, Score, Rating）を返す。
 
@@ -96,11 +120,23 @@ def rate_action_row(
         return {"RiskLevel": SKIP_FIXED_RISK_LEVEL, "Score": None, "Rating": SKIP_FIXED_RATING}
 
     score = compute_score(avg_return, win_rate, max_drawdown)
-    rating = apply_peer_significance_cap(score_to_rating(score), peer_p_value)
+    rating = apply_significance_cap(
+        score_to_rating(score),
+        single_stock_hit_rate,
+        single_stock_avg_return,
+        single_stock_insufficient_sample,
+        peer_avg_return,
+    )
     return {"RiskLevel": risk_level(max_drawdown), "Score": score, "Rating": rating}
 
 
-def add_action_ratings(result_df: pd.DataFrame, peer_p_value: float | None) -> pd.DataFrame:
+def add_action_ratings(
+    result_df: pd.DataFrame,
+    single_stock_hit_rate: float | None,
+    single_stock_avg_return: float | None,
+    single_stock_insufficient_sample: bool,
+    peer_avg_return: float | None,
+) -> pd.DataFrame:
     """デモトレード結果df（calc_demo_tradeの出力）にRiskLevel, Score, Rating列を追加して返す。
 
     既存のresult_dfの行・列構成は変更せず、末尾に判定結果の列を追加するのみ。
@@ -112,7 +148,10 @@ def add_action_ratings(result_df: pd.DataFrame, peer_p_value: float | None) -> p
 
     df = result_df.reset_index(drop=True).copy()
     ratings = [
-        rate_action_row(row["Action"], row["AvgReturn"], row["WinRate"], row["MaxDrawdown"], peer_p_value)
+        rate_action_row(
+            row["Action"], row["AvgReturn"], row["WinRate"], row["MaxDrawdown"],
+            single_stock_hit_rate, single_stock_avg_return, single_stock_insufficient_sample, peer_avg_return,
+        )
         for _, row in df.iterrows()
     ]
     df["RiskLevel"] = [r["RiskLevel"] for r in ratings]

@@ -26,8 +26,9 @@ MIN_LOOKBACK_DAYS = 60
 # 最大値に合わせる
 EVALUATION_HORIZON_DAYS = 20
 
-# 検証地点の目標数（固定8地点）
-TARGET_VALIDATION_POINTS = 8
+# 検証地点の目標数の下限・上限。データ量に応じて動的に算出した目標地点数をこの範囲にクランプする
+MIN_VALIDATION_POINTS = 8
+MAX_VALIDATION_POINTS = 25
 
 # p値を算出するために最低限必要なサンプル数
 MIN_SAMPLE_FOR_PVALUE = 5
@@ -64,19 +65,41 @@ def _build_indicator_history(price_df: pd.DataFrame) -> pd.DataFrame:
     return history
 
 
+def _verifiable_range(total_rows: int, min_lookback_days: int, evaluation_horizon_days: int) -> int:
+    """検証地点として配置可能な行番号の範囲（開始〜終了の幅）を返す。データ不足時は負値。"""
+    last_valid_idx = total_rows - 1 - evaluation_horizon_days
+    return last_valid_idx - min_lookback_days
+
+
+def _determine_target_points(total_rows: int, min_lookback_days: int, evaluation_horizon_days: int) -> int:
+    """検証地点の目標数を、データ量（検証可能な行数の範囲）に応じて動的に算出する。
+
+    verifiable_range // evaluation_horizon_days を目安とし、
+    [MIN_VALIDATION_POINTS, MAX_VALIDATION_POINTS]にクランプする
+    （評価ウィンドウが重複しすぎる密な配置や、過剰に少ない地点数を避けるため）。
+    """
+    verifiable_range = _verifiable_range(total_rows, min_lookback_days, evaluation_horizon_days)
+    if verifiable_range < 0:
+        return MIN_VALIDATION_POINTS
+    estimated = verifiable_range // evaluation_horizon_days
+    return max(MIN_VALIDATION_POINTS, min(MAX_VALIDATION_POINTS, estimated))
+
+
 def _determine_validation_points(
     total_rows: int, min_lookback_days: int, evaluation_horizon_days: int, target_points: int
 ) -> list[int]:
     """検証地点（price_dfの行番号）を固定間隔で機械的に配置し、行番号のリストを返す。
 
     データ不足でtarget_points地点を確保できない場合は、自動的に地点数を減らす。
+    地点間隔がevaluation_horizon_days未満になる（評価ウィンドウが重複し、疑似的な複製に
+    なる）配置も避けるため、間隔を保てる範囲で配置できる最大地点数にもクランプする。
     """
-    last_valid_idx = total_rows - 1 - evaluation_horizon_days
-    verifiable_range = last_valid_idx - min_lookback_days
+    verifiable_range = _verifiable_range(total_rows, min_lookback_days, evaluation_horizon_days)
     if verifiable_range < 0:
         return []
 
-    max_points = min(target_points, verifiable_range + 1)
+    max_points_by_spacing = verifiable_range // evaluation_horizon_days + 1
+    max_points = min(target_points, verifiable_range + 1, max_points_by_spacing)
     if max_points <= 1:
         return [min_lookback_days]
 
@@ -182,19 +205,21 @@ def _aggregate_stats(returns: list[float], hits: list[float], sample_count_for_t
 
 def run_single_stock_validation(
     price_df: pd.DataFrame,
-    target_points: int = TARGET_VALIDATION_POINTS,
+    target_points: int | None = None,
     min_lookback_days: int = MIN_LOOKBACK_DAYS,
     evaluation_horizon_days: int = EVALUATION_HORIZON_DAYS,
     tolerance: dict[str, float] | None = None,
 ) -> dict:
     """単体銘柄のwalk-forward検証（新規実装1）を実行する。
 
-    対象期間内に固定target_points地点を機械的な間隔で配置し、各地点でその時点より前の
+    対象期間内にtarget_points地点を機械的な間隔で配置し、各地点でその時点より前の
     データのみを使って類似局面抽出→デモトレードを行い、想定方向と実際の値動きの方向を照合する。
 
     Args:
         price_df: 検証対象銘柄の株価df（Date, Open, High, Low, Close, Volume）。
-        target_points: 目標検証地点数（デフォルト8）。
+        target_points: 目標検証地点数。未指定（None）の場合はデータ量に応じて
+            _determine_target_pointsで動的に算出する（[MIN_VALIDATION_POINTS,
+            MAX_VALIDATION_POINTS]の範囲）。明示的に指定した場合はその値を優先する。
         min_lookback_days: 各検証地点で最低限確保する過去データの日数。
         evaluation_horizon_days: 検証地点から何営業日後の値動きと照合するか。
         tolerance: 類似局面抽出の許容幅（未指定時はextract_similar_periodsの既定値）。
@@ -218,6 +243,10 @@ def run_single_stock_validation(
 
     price = price_df.reset_index(drop=True).copy()
     price["Date"] = price["Date"].astype(str)
+
+    if target_points is None:
+        target_points = _determine_target_points(len(price), min_lookback_days, evaluation_horizon_days)
+        result["requested_points"] = target_points
 
     ref_indices = _determine_validation_points(len(price), min_lookback_days, evaluation_horizon_days, target_points)
     if not ref_indices:
@@ -260,7 +289,7 @@ def run_peer_universe_validation(
     ticker: str,
     price_df: pd.DataFrame,
     period: str,
-    target_points: int = TARGET_VALIDATION_POINTS,
+    target_points: int | None = None,
     target_sample_size: int = 20,
     min_lookback_days: int = MIN_LOOKBACK_DAYS,
     evaluation_horizon_days: int = EVALUATION_HORIZON_DAYS,
@@ -276,6 +305,8 @@ def run_peer_universe_validation(
         ticker: 検証対象銘柄コード。
         price_df: 対象銘柄の株価df（呼び出し元で取得済みのものを再利用し、再取得しない）。
         period: peer銘柄の株価取得に使う期間文字列（get_stock_dataにそのまま渡す）。
+        target_points: 各社のrun_single_stock_validationに渡す目標検証地点数。
+            未指定（None）の場合は社ごとのデータ量に応じて動的に算出される。
         target_sample_size: peer拡張の目標サンプル数（デフォルト20社）。
 
     Returns:

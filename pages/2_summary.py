@@ -5,6 +5,7 @@
 """
 
 import streamlit as st
+import plotly.graph_objects as go
 
 from logic.indicators import calc_rsi, calc_bollinger, calc_bb_position, calc_hv, calc_volume_ratio
 from logic.error_utils import show_warning
@@ -60,5 +61,22 @@ if latest_rsi is None:
 
 st.divider()
 st.subheader("直近の値動き")
-chart_df = stock_df[["Date", "Close"]].set_index("Date")
-st.line_chart(chart_df)
+
+fig = go.Figure(data=[
+    go.Scatter(x=stock_df["Date"], y=stock_df["Close"], mode="lines", name="終値")
+])
+
+stance = st.session_state.get("investment_stance")
+purchase_date = st.session_state.get("purchase_date")
+if stance == "すでに保有している" and purchase_date:
+    if stock_df["Date"].min() <= purchase_date <= stock_df["Date"].max():
+        fig.add_vline(
+            x=purchase_date,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="購入日",
+            annotation_position="top",
+        )
+
+fig.update_layout(xaxis_title="日付", yaxis_title="価格", height=350)
+st.plotly_chart(fig, use_container_width=True)

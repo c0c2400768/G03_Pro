@@ -13,7 +13,6 @@ import pandas as pd
 import streamlit as st
 
 from logic.decision_rating import (
-    PEER_PVALUE_SIGNIFICANCE_THRESHOLD,
     RATING_CONSIDERABLE,
     RATING_NOT_RECOMMENDED,
     RATING_RECOMMENDED,
@@ -64,7 +63,10 @@ _STYLE = """
 .ds-pill-rating-considerable { background:#dbeafe; color:#1d4ed8; }
 .ds-pill-rating-not_recommended { background:#f3f4f6; color:#6b7280; }
 
-.ds-angle-row { display:flex; gap:16px; }
+/* margin-bottom:16pxは、st.markdownのラッパー要素(stMarkdownContainer)がst側で
+   margin-bottom:-16pxを持つため、その分を打ち消してst.container(border=True)の
+   下端とカードの下端を揃えるためのもの（打ち消さないとカードが外枠の下端をはみ出す）。 */
+.ds-angle-row { display:flex; align-items:stretch; gap:16px; margin-bottom:16px; }
 .ds-angle-card { flex:1; border-radius:12px; padding:16px; }
 .ds-angle-green { background:#f0fdf4; }
 .ds-angle-blue { background:#eff6ff; }
@@ -290,26 +292,41 @@ def render_decision_angles(ranked_df: pd.DataFrame) -> None:
             st.markdown(f'<div class="ds-angle-row">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
-def render_disclaimer_footer(recommended_row: pd.Series | None, peer_result: dict | None) -> None:
+def render_disclaimer_footer(
+    recommended_row: pd.Series | None,
+    single_stock_result: dict | None,
+    peer_result: dict | None,
+) -> None:
     """統計検証の結果が推奨ラベルの信頼度を保証するものではない旨の総括注意書きを表示する。"""
     if recommended_row is None:
         return
 
     label = _action_label(recommended_row)
-    peer_significant = (
-        peer_result is not None
-        and peer_result.get("p_value") is not None
-        and not peer_result.get("insufficient_sample")
-        and not peer_result.get("p_value_is_reference")
-        and peer_result["p_value"] < PEER_PVALUE_SIGNIFICANCE_THRESHOLD
+
+    single_stock_hit_rate = single_stock_result.get("hit_rate") if single_stock_result else None
+    single_stock_avg_return = single_stock_result.get("avg_return") if single_stock_result else None
+    single_stock_insufficient_sample = (
+        single_stock_result.get("insufficient_sample", True) if single_stock_result else True
+    )
+    peer_avg_return = peer_result.get("avg_return") if peer_result else None
+
+    hit_rate_ok = (
+        not single_stock_insufficient_sample
+        and single_stock_hit_rate is not None
+        and single_stock_hit_rate > 0.5
+    )
+    direction_ok = (
+        single_stock_avg_return is not None
+        and peer_avg_return is not None
+        and ((single_stock_avg_return > 0 and peer_avg_return > 0) or (single_stock_avg_return < 0 and peer_avg_return < 0))
     )
 
-    if peer_significant:
-        note = "統計検証でも一定の再現性が確認されていますが、将来の値動きを保証するものではありません。"
+    if hit_rate_ok and direction_ok:
+        note = "統計検証でも的中率・値動きの方向に一定の再現性が確認されていますが、将来の値動きを保証するものではありません。"
     else:
         note = "統計検証はまだ強い優位性を示す段階ではありません。実運用では他の指標と併用してください。"
 
     st.markdown(
-        f'<div class="ds-footer">⭐ 今回のおすすめは「{label}」ですが、{note}</div>',
+        f'<div class="ds-footer">⭐ 今回のおすすめは「{label}」です。{note}</div>',
         unsafe_allow_html=True,
     )
