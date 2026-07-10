@@ -153,6 +153,10 @@ def render_peer_validation_card(result: dict) -> None:
             f"合計検証地点数：{result['total_points']}地点"
         )
         st.markdown(_stat_metric_row_html(result), unsafe_allow_html=True)
+        st.caption(
+            "ℹ️ このp値は「投資行動の判定（推奨/検討可/非推奨）」には使用していません。"
+            "上部の結論カードにある「業種内整合性」の判定材料として、参考情報としてのみ表示しています。"
+        )
 
         with st.expander("銘柄ごとの明細"):
             per_company_df = result["per_company"]

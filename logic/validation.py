@@ -11,7 +11,7 @@ from __future__ import annotations
 import pandas as pd
 from scipy import stats
 
-from logic.comparison import select_peer_universe_for_validation
+from logic.comparison import select_peer_universe_for_validation, sector_company_count
 from logic.data_fetch import get_stock_data
 from logic.demo_trade import calc_demo_trade
 from logic.indicators import calc_bb_position, calc_bollinger, calc_hv, calc_rsi, calc_volume_ratio
@@ -36,6 +36,16 @@ MIN_SAMPLE_FOR_PVALUE = 5
 # walk-forward検証で「想定方向」を判定する際に使う投資行動
 # （新規購入を想定した最も基本的な行動を代表として採用）
 VALIDATION_ACTION = "buy_today"
+
+# 業種横断検証（新規実装2）の目標サンプル数。対象銘柄の33業種区分の銘柄数が
+# LARGE_SECTOR_COMPANY_COUNT_THRESHOLD以上（業種規模が大きい）場合は目標を引き上げ、
+# より多くの同業他社でサンプルを拡張できるようにする。それ未満は従来通り20を維持する。
+# 20/30という数字自体は、統計学で正規近似が効きやすい目安とされるn≥30
+# （中心極限定理が効きやすい目安）に寄せたもの。業種規模が小さい場合の20は、
+# 30を確保できない場合の妥協値として設定している。
+LARGE_SECTOR_COMPANY_COUNT_THRESHOLD = 50
+DEFAULT_TARGET_SAMPLE_SIZE = 20
+LARGE_SECTOR_TARGET_SAMPLE_SIZE = 30
 
 POINT_COLUMNS = [
     "RefDate", "PredictedDirection", "ActualDirection", "Hit", "ActualReturn", "SimilarSampleSize",
@@ -132,8 +142,15 @@ def _evaluate_single_point(
         "VolumeRatio": current_row["VolumeRatio"],
     }
 
-    # look-ahead bias防止：基準時点より前のデータのみを類似局面抽出の対象にする
-    past_history = indicator_history.loc[indicator_history["Date"] < ref_date]
+    # look-ahead bias防止：類似局面側にもevaluation_horizon_days分の評価窓があるため、
+    # 単純にref_date未満で絞るとその窓がref_date以降にはみ出し、未来情報が混入する。
+    # そのため、類似局面の評価窓がref_idxより前で完結するsafe_cutoff_idx未満のみを対象にする。
+    safe_cutoff_idx = ref_idx - evaluation_horizon_days
+    if safe_cutoff_idx < 0:
+        return None
+    safe_cutoff_date = str(price_df.iloc[safe_cutoff_idx]["Date"])
+
+    past_history = indicator_history.loc[indicator_history["Date"] < safe_cutoff_date]
     similar_df = extract_similar_periods(current, past_history, tolerance)
     if similar_df.empty:
         return None
@@ -154,6 +171,8 @@ def _evaluate_single_point(
         return None
 
     exit_close = price_df.iloc[exit_idx]["Close"]
+    if pd.isna(exit_close):
+        return None
     actual_return = (exit_close - entry_close) / entry_close
     actual_direction = "up" if actual_return > 0 else ("down" if actual_return < 0 else "flat")
 
@@ -285,12 +304,24 @@ def run_single_stock_validation(
     return result
 
 
+def _determine_target_sample_size(ticker: str) -> int:
+    """対象銘柄の33業種区分の銘柄数から、業種横断検証の目標サンプル数を決める。
+
+    業種の総銘柄数がLARGE_SECTOR_COMPANY_COUNT_THRESHOLD以上ならより多くの
+    同業他社が存在するとみなしLARGE_SECTOR_TARGET_SAMPLE_SIZEに引き上げ、
+    それ未満・業種が特定できない場合はDEFAULT_TARGET_SAMPLE_SIZEを維持する。
+    """
+    if sector_company_count(ticker) >= LARGE_SECTOR_COMPANY_COUNT_THRESHOLD:
+        return LARGE_SECTOR_TARGET_SAMPLE_SIZE
+    return DEFAULT_TARGET_SAMPLE_SIZE
+
+
 def run_peer_universe_validation(
     ticker: str,
     price_df: pd.DataFrame,
     period: str,
     target_points: int | None = None,
-    target_sample_size: int = 20,
+    target_sample_size: int | None = None,
     min_lookback_days: int = MIN_LOOKBACK_DAYS,
     evaluation_horizon_days: int = EVALUATION_HORIZON_DAYS,
     tolerance: dict[str, float] | None = None,
@@ -307,7 +338,8 @@ def run_peer_universe_validation(
         period: peer銘柄の株価取得に使う期間文字列（get_stock_dataにそのまま渡す）。
         target_points: 各社のrun_single_stock_validationに渡す目標検証地点数。
             未指定（None）の場合は社ごとのデータ量に応じて動的に算出される。
-        target_sample_size: peer拡張の目標サンプル数（デフォルト20社）。
+        target_sample_size: peer拡張の目標サンプル数。未指定（None）の場合は
+            対象銘柄の業種規模（_determine_target_sample_size）に応じて20または30を使う。
 
     Returns:
         以下のキーを持つdict。
@@ -315,7 +347,14 @@ def run_peer_universe_validation(
         - target_sample_size: 目標サンプル数
         - company_count: 実際に検証できた社数（対象銘柄を含む）
         - total_points: 全社合計の実際の検証地点数
-        - hit_rate / avg_return / p_value / p_value_is_reference / insufficient_sample
+        - hit_rate / avg_return / p_value / p_value_is_reference / insufficient_sample:
+          いずれも「地点単位」ではなく、per_companyの社ごとの値（HitRate/AvgReturn）を
+          社単位で単純平均したもの。AvgReturnのp値（_ttest_pvalue）も社ごとのAvgReturnの
+          リストに対して算出しており、集計単位を社単位に揃えている。これは、AvgReturnの
+          p値計算の集計単位（社単位）に揃えることで、同一社内の複数地点をそれぞれ
+          独立サンプルとして扱う疑似反復（pseudoreplication。本来は独立でない
+          同一銘柄内の複数観測を、あたかも独立な多数のサンプルであるかのように扱ってしまい、
+          有意性を過大評価すること）を避けるための設計。
         - per_company: 社ごとの明細df（PEER_RESULT_COLUMNS）
     """
     empty_per_company = pd.DataFrame(columns=PEER_RESULT_COLUMNS)
@@ -327,6 +366,10 @@ def run_peer_universe_validation(
 
     if not ticker or price_df is None or price_df.empty:
         return result
+
+    if target_sample_size is None:
+        target_sample_size = _determine_target_sample_size(ticker)
+        result["target_sample_size"] = target_sample_size
 
     peer_tickers = select_peer_universe_for_validation(ticker, target_sample_size)
     result["peer_tickers"] = peer_tickers

@@ -44,6 +44,26 @@ def _empty_df(columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(columns=columns)
 
 
+def _drop_incomplete_trailing_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """末尾から連続するClose=NaNの行を取り除く。
+
+    yfinanceは、取引所が当日分のデータをまだ確定・公開していない時間帯
+    （寄り付き前・深夜等）にクエリすると、実データの無い「当日」の行
+    （Close等が全てNaN）を末尾に含めて返すことがある。この行が.iloc[-1]で
+    「最新行」として扱われると、表示や統計検証にNaNが伝播してしまう。
+    履歴内部の欠損（休場日ギャップ等）をNaNのまま残す方針（6-3）はそのまま維持するため、
+    末尾から連続するNaN行だけを対象にし、有効な行に当たった時点で止める。
+    """
+    if df.empty or "Close" not in df.columns:
+        return df
+    valid_positions = df.index[df["Close"].notna()]
+    if len(valid_positions) == len(df):
+        return df
+    if valid_positions.empty:
+        return df.iloc[0:0]
+    return df.loc[: valid_positions[-1]].copy()
+
+
 def _history_to_df(history: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """yfinanceのhistory結果をDate文字列列＋指定列のDataFrameに整形する。"""
     if history is None or history.empty:
@@ -54,7 +74,9 @@ def _history_to_df(history: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     missing = [c for c in columns if c not in df.columns]
     if missing:
         return _empty_df(columns)
-    return df[columns].copy()
+    df = df[columns].copy()
+    df = _drop_incomplete_trailing_rows(df)
+    return df.reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600)

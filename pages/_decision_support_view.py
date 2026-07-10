@@ -16,7 +16,12 @@ from logic.decision_rating import (
     RATING_CONSIDERABLE,
     RATING_NOT_RECOMMENDED,
     RATING_RECOMMENDED,
+    SECTOR_VALIDITY_CAUTION,
+    SECTOR_VALIDITY_CONSISTENT,
+    SECTOR_VALIDITY_REFERENCE,
+    SECTOR_VALIDITY_UNJUDGEABLE,
     SKIP_ACTION,
+    rating_to_mark,
 )
 from logic.demo_trade import ACTION_LABELS
 from logic.error_utils import show_warning
@@ -95,6 +100,15 @@ _RATING_PILL_CLASS = {
 
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 
+# judge_sector_validity（業種内整合性）の各ラベルの意味を、目視で確認しやすいよう
+# 一言補足として併記する。既存の推奨/検討可/非推奨の判定ロジックには影響しない表示専用の説明
+_SECTOR_VALIDITY_DESCRIPTIONS = {
+    SECTOR_VALIDITY_CONSISTENT: "同業他社と方向性が一致し、統計的にも有意です。",
+    SECTOR_VALIDITY_REFERENCE: "同業他社と方向性は一致していますが、統計的な有意性はまだ弱い（参考程度）です。",
+    SECTOR_VALIDITY_CAUTION: "この銘柄と同業他社平均で値動きの方向が一致していません。判定の信頼度にご注意ください。",
+    SECTOR_VALIDITY_UNJUDGEABLE: "同業他社のサンプル数が少なく、整合性を判定できませんでした。",
+}
+
 
 def inject_styles() -> None:
     """このモジュール・_validation_view.pyで共通利用するカードデザインのCSSを注入する。"""
@@ -102,10 +116,22 @@ def inject_styles() -> None:
 
 
 def _action_label(row: pd.Series) -> str:
+    """行動ラベルを組み立てる。skip・sell等horizon概念が無い行動（Horizon=NaN）は
+    「（N営業日）」の付与を省く（int(nan)はValueErrorになるため、NaN判定が必須）。"""
     label = ACTION_LABELS.get(row["Action"], row["Action"])
-    if row["Action"] == SKIP_ACTION:
+    if row["Action"] == SKIP_ACTION or pd.isna(row["Horizon"]):
         return label
     return f"{label}（{int(row['Horizon'])}営業日）"
+
+
+def _comparison_action_label(row: pd.Series) -> str:
+    """比較表専用のラベル。「追加購入」はholdと計算式が同一のため独立行動を持たず、
+    hold行の最終判定（Rating）を◯/△/×の記号で流用表示する
+    （この表示変更は補助判断画面の比較表限定。pages/6のデモトレード結果画面は対象外）。"""
+    label = _action_label(row)
+    if row["Action"] == "hold":
+        return f"{label}[追加購入{rating_to_mark(row['Rating'])}]"
+    return label
 
 
 def _return_html(avg_return: float) -> str:
@@ -131,8 +157,18 @@ def _rating_pill_html(rating: str) -> str:
     return f'<span class="ds-pill {css_class}">{rating}</span>'
 
 
-def render_conclusion_card(recommended_row: pd.Series | None, ranked_df: pd.DataFrame, stance: str) -> None:
-    """結論カード（おすすめ行動・平均リターン・勝率・参考:最良結果）を表示する。"""
+def render_conclusion_card(
+    recommended_row: pd.Series | None,
+    ranked_df: pd.DataFrame,
+    stance: str,
+    sector_validity_label: str | None = None,
+) -> None:
+    """結論カード（おすすめ行動・平均リターン・勝率・参考:最良結果）を表示する。
+
+    sector_validity_label: judge_sector_validityの判定結果（業種内整合性）。既存の
+        推奨/検討可/非推奨とは無関係の別枠の補足情報として、銘柄全体に対して1行だけ表示する。
+        Noneの場合は表示しない（統計検証データが無い等）。
+    """
     with st.container(border=True):
         st.markdown(
             f'<div class="ds-card-header">'
@@ -184,6 +220,14 @@ def render_conclusion_card(recommended_row: pd.Series | None, ranked_df: pd.Data
             unsafe_allow_html=True,
         )
 
+        if sector_validity_label is not None:
+            description = _SECTOR_VALIDITY_DESCRIPTIONS.get(sector_validity_label, "")
+            st.markdown(
+                f'<div class="ds-desc-text">🏢 業種内整合性：{sector_validity_label}'
+                f'（{description}）</div>',
+                unsafe_allow_html=True,
+            )
+
 
 def render_comparison_table(ranked_df: pd.DataFrame) -> None:
     """投資行動の比較表（順位・投資行動・平均リターン・勝率・リスク・評価）を表示する。"""
@@ -207,7 +251,7 @@ def render_comparison_table(ranked_df: pd.DataFrame) -> None:
             rows_html.append(
                 "<tr>"
                 f"<td>{rank_label}</td>"
-                f"<td>{_action_label(row)}</td>"
+                f"<td>{_comparison_action_label(row)}</td>"
                 f"<td>{_return_html(row['AvgReturn'])}</td>"
                 f"<td>{_winrate_html(row['WinRate'])}</td>"
                 f"<td>{_risk_pill_html(row['RiskLevel'])}</td>"
@@ -303,26 +347,30 @@ def render_disclaimer_footer(
 
     label = _action_label(recommended_row)
 
-    single_stock_hit_rate = single_stock_result.get("hit_rate") if single_stock_result else None
     single_stock_avg_return = single_stock_result.get("avg_return") if single_stock_result else None
+    single_stock_p_value = single_stock_result.get("p_value") if single_stock_result else None
+    single_stock_p_value_is_reference = (
+        single_stock_result.get("p_value_is_reference", False) if single_stock_result else False
+    )
     single_stock_insufficient_sample = (
         single_stock_result.get("insufficient_sample", True) if single_stock_result else True
     )
     peer_avg_return = peer_result.get("avg_return") if peer_result else None
 
-    hit_rate_ok = (
-        not single_stock_insufficient_sample
-        and single_stock_hit_rate is not None
-        and single_stock_hit_rate > 0.5
-    )
+    # apply_significance_capと同じ判定基準（p_value_is_referenceなら0.10、通常は0.05）で
+    # 注意書きの文言を出し分ける。サンプル不足の場合はp値自体が無いため専用の注意書きにする。
     direction_ok = (
         single_stock_avg_return is not None
         and peer_avg_return is not None
         and ((single_stock_avg_return > 0 and peer_avg_return > 0) or (single_stock_avg_return < 0 and peer_avg_return < 0))
     )
+    p_value_threshold = 0.10 if single_stock_p_value_is_reference else 0.05
+    p_value_ok = single_stock_p_value is not None and single_stock_p_value < p_value_threshold
 
-    if hit_rate_ok and direction_ok:
-        note = "統計検証でも的中率・値動きの方向に一定の再現性が確認されていますが、将来の値動きを保証するものではありません。"
+    if single_stock_insufficient_sample:
+        note = "サンプル不足のため統計的有意性は未確認です。将来の値動きを保証するものではありません。"
+    elif direction_ok and p_value_ok:
+        note = "統計検証でも値動きの方向に一定の再現性が確認されていますが、将来の値動きを保証するものではありません。"
     else:
         note = "統計検証はまだ強い優位性を示す段階ではありません。実運用では他の指標と併用してください。"
 

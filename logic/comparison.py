@@ -108,6 +108,25 @@ def select_comparison_targets(ticker: str) -> dict[str, str | list[str]]:
     return {"market_index": MARKET_INDEX, "peers": [f"{c}.T" for c in peer_codes]}
 
 
+def sector_company_count(ticker: str) -> int:
+    """指定銘柄が属する33業種区分の銘柄数（データ上の全体数、対象銘柄自身を含む）を返す。
+
+    業種横断検証（run_peer_universe_validation）の目標サンプル数を業種規模に応じて
+    可変にするために使う。業種が特定できない場合は0を返す（例外は投げない）。
+    """
+    if not ticker:
+        return 0
+
+    code = ticker.strip().split(".")[0]
+    sector_map, _ = _load_sector_and_size_maps()
+
+    sector = sector_map.get(code)
+    if sector is None:
+        return 0
+
+    return sum(1 for s in sector_map.values() if s == sector)
+
+
 def select_peer_universe_for_validation(
     ticker: str, target_sample_size: int = VALIDATION_TARGET_SAMPLE_SIZE
 ) -> list[str]:

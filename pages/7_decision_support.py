@@ -5,8 +5,14 @@ from __future__ import annotations
 import streamlit as st
 
 from logic.csv_export import build_decision_support_export
-from logic.decision_rating import add_action_ratings, rank_rated_actions, select_recommended_action
+from logic.decision_rating import (
+    add_action_ratings,
+    judge_sector_validity,
+    rank_rated_actions,
+    select_recommended_action,
+)
 from logic.error_utils import show_warning
+from logic.indicators import calc_hv
 from logic.validation import run_peer_universe_validation, run_single_stock_validation
 from pages._decision_support_view import (
     inject_styles,
@@ -75,20 +81,44 @@ if price_df is not None and not price_df.empty and ticker:
 
 single_stock_hit_rate = single_stock_result.get("hit_rate") if single_stock_result is not None else None
 single_stock_avg_return = single_stock_result.get("avg_return") if single_stock_result is not None else None
+single_stock_p_value = single_stock_result.get("p_value") if single_stock_result is not None else None
+single_stock_p_value_is_reference = (
+    single_stock_result.get("p_value_is_reference", False) if single_stock_result is not None else False
+)
 single_stock_insufficient_sample = (
     single_stock_result.get("insufficient_sample", True) if single_stock_result is not None else True
 )
 peer_avg_return = peer_result.get("avg_return") if peer_result is not None else None
+peer_p_value = peer_result.get("p_value") if peer_result is not None else None
+peer_sample_size = peer_result.get("company_count", 0) if peer_result is not None else 0
+
+# 対象銘柄の年率ヒストリカルボラティリティ（直近値）。リスク判定（risk_level）を
+# 銘柄自身の値動きの大きさ基準にするために使う。算出不可の場合はNone（固定閾値にフォールバック）
+latest_hv = None
+if price_df is not None and not price_df.empty:
+    hv_series = calc_hv(price_df)["HV"].dropna()
+    if not hv_series.empty:
+        latest_hv = float(hv_series.iloc[-1])
 
 # --- 投資行動の判定（推奨/検討可/非推奨） -----------------------------------
 rated_df = add_action_ratings(
-    result_df, single_stock_hit_rate, single_stock_avg_return, single_stock_insufficient_sample, peer_avg_return
+    result_df, latest_hv,
+    single_stock_hit_rate, single_stock_avg_return, single_stock_p_value, single_stock_p_value_is_reference,
+    single_stock_insufficient_sample, peer_avg_return,
 )
 ranked_df = rank_rated_actions(rated_df)
 recommended_row = select_recommended_action(ranked_df)
 
+# 単体銘柄検証がサンプル不足の場合、判定ロジックには組み込まない（apply_significance_cap参照）ため、
+# 統計的有意性が未確認である旨をここで注意書きとして表示する
+if single_stock_insufficient_sample:
+    st.caption("⚠️ サンプル不足のため統計的有意性は未確認です（上記の判定はp値による裏付けができていません）。")
+
+# --- 業種内整合性（既存の推奨/検討可/非推奨とは独立した別枠の補足情報） -------------
+sector_validity_label = judge_sector_validity(peer_p_value, single_stock_avg_return, peer_avg_return, peer_sample_size)
+
 # --- 結論カード -------------------------------------------------------------
-render_conclusion_card(recommended_row, ranked_df, stance)
+render_conclusion_card(recommended_row, ranked_df, stance, sector_validity_label)
 
 # --- 投資行動の比較表 --------------------------------------------------------
 render_comparison_table(ranked_df)

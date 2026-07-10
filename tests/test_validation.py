@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from logic.validation import (
+    DEFAULT_TARGET_SAMPLE_SIZE,
+    LARGE_SECTOR_TARGET_SAMPLE_SIZE,
     MAX_VALIDATION_POINTS,
     MIN_VALIDATION_POINTS,
     _determine_target_points,
+    _determine_target_sample_size,
     _determine_validation_points,
     run_single_stock_validation,
 )
@@ -74,6 +78,16 @@ class RunSingleStockValidationDynamicTargetTest(unittest.TestCase):
         price_df = pd.DataFrame({"Date": [f"2024-01-{i:02d}" for i in range(1, 11)], "Close": range(10)})
         result = run_single_stock_validation(price_df, target_points=3)
         self.assertEqual(result["requested_points"], 3)
+
+
+class DetermineTargetSampleSizeTest(unittest.TestCase):
+    def test_large_sector_uses_raised_target(self) -> None:
+        with patch("logic.validation.sector_company_count", return_value=50):
+            self.assertEqual(_determine_target_sample_size("1000.T"), LARGE_SECTOR_TARGET_SAMPLE_SIZE)
+
+    def test_small_sector_keeps_default_target(self) -> None:
+        with patch("logic.validation.sector_company_count", return_value=49):
+            self.assertEqual(_determine_target_sample_size("1000.T"), DEFAULT_TARGET_SAMPLE_SIZE)
 
 
 if __name__ == "__main__":

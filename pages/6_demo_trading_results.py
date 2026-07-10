@@ -2,7 +2,7 @@
 
 import streamlit as st
 
-from logic.demo_trade import calc_demo_trade, HOLDING_ACTIONS, NEW_ACTIONS, ACTION_LABELS
+from logic.demo_trade import calc_demo_trade, HOLDING_ACTIONS, NEW_ACTIONS, ACTION_LABELS, SELL_ACTION
 from logic.error_utils import show_error, show_warning
 
 COLUMN_LABELS = {
@@ -62,7 +62,8 @@ if result_df.empty:
     st.stop()
 
 horizon_choice = st.selectbox("比較する経過日数", [5, 10, 20], index=1)
-horizon_result_df = result_df[result_df["Horizon"] == horizon_choice]
+# sellはhorizon概念が無く常に1行のみ存在するため、選択中のhorizonに関わらず表示対象に含める
+horizon_result_df = result_df[(result_df["Horizon"] == horizon_choice) | (result_df["Action"] == SELL_ACTION)]
 
 st.subheader("結果サマリー")
 st.markdown(
@@ -89,6 +90,12 @@ st.markdown(
 st.subheader("詳細データ")
 display_df = horizon_result_df.copy()
 display_df["ActionLabel"] = display_df["Action"].map(ACTION_LABELS)
+# sellはhorizon概念が無くHorizonがNaNになるため、「―」で表示する。
+# 数値と文字列が混在する列だとpyarrowのArrow変換で型推定に失敗するため、他の行も
+# 文字列に揃える（他は従来通りの数値表記のまま、単位等は付けない）
+display_df["Horizon"] = display_df.apply(
+    lambda r: "―" if r["Action"] == SELL_ACTION else str(int(r["Horizon"])), axis=1
+)
 display_df = display_df[["ActionLabel", "Horizon", "AvgReturn", "WinRate", "MaxLoss", "MaxDrawdown", "AvgHoldDays"]]
 display_df = display_df.rename(columns=COLUMN_LABELS)
 display_df["平均リターン"] = display_df["平均リターン"].map(lambda x: f"{x:+.2%}")

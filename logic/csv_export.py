@@ -6,8 +6,8 @@ from datetime import datetime
 
 import pandas as pd
 
-from logic.decision_rating import SKIP_ACTION
-from logic.demo_trade import ACTION_LABELS
+from logic.decision_rating import SKIP_ACTION, rating_to_mark
+from logic.demo_trade import ACTION_LABELS, SELL_ACTION
 from logic.ticker_lookup import get_company_name
 
 
@@ -44,10 +44,19 @@ _EXPORT_COLUMN_ORDER = [
 
 
 def _format_horizon(row: pd.Series) -> str:
-    """見送り（skip）は経過日数の概念が無いため「―」、それ以外は「N営業日」を返す。"""
-    if row["Action"] == SKIP_ACTION:
+    """見送り（skip）・売却（sell）は経過日数の概念が無いため「―」、それ以外は「N営業日」を返す。"""
+    if row["Action"] in (SKIP_ACTION, SELL_ACTION):
         return "―"
     return f"{int(row['Horizon'])}営業日"
+
+
+def _format_action_label(row: pd.Series) -> str:
+    """「追加購入」はholdと計算式が同一のため独立行動を持たず、hold行の最終判定（Rating）を
+    ◯/△/×の記号で流用表示する（画面表示のpages/_decision_support_view.pyと同じ方式）。"""
+    label = ACTION_LABELS.get(row["Action"], row["Action"])
+    if row["Action"] == "hold":
+        return f"{label}[追加購入{rating_to_mark(row['Rating'])}]"
+    return label
 
 
 def build_decision_support_export(
@@ -71,7 +80,7 @@ def build_decision_support_export(
         generated_at = datetime.now()
 
     df = ranked_df.copy()
-    df["ActionLabel"] = df["Action"].map(ACTION_LABELS)
+    df["ActionLabel"] = df.apply(_format_action_label, axis=1)
     df["HorizonLabel"] = df.apply(_format_horizon, axis=1)
     df["AvgReturnLabel"] = df["AvgReturn"].map(lambda x: f"{x:+.2%}")
     df["WinRateLabel"] = df["WinRate"].map(lambda x: f"{x:.1%}")

@@ -9,12 +9,18 @@ RESULT_COLUMNS = [
     "AvgHoldDays", "AvgWaitDays", "SampleSize",
 ]
 
-HOLDING_ACTIONS = ["hold", "sell", "partial_sell", "add", "stop_loss"]
+HOLDING_ACTIONS = ["hold", "sell", "partial_sell", "stop_loss"]
 NEW_ACTIONS = ["buy_today", "wait", "split_buy", "skip"]
 
+# 「売却」はhorizon（経過日数）に依存しない行動のため、他の行動と違いhorizonループの
+# 対象外として1回だけ集計する（calc_demo_trade参照）
+SELL_ACTION = "sell"
+
+# 「追加購入」は計算式がholdと完全に同一のため独立した行動として持たず、holdの結果を
+# 流用表示する（pages/_decision_support_view.py, logic/csv_export.py参照）
 ACTION_LABELS = {
     "hold": "保有継続", "sell": "売却", "partial_sell": "一部売却",
-    "add": "追加購入", "stop_loss": "損切り設定",
+    "stop_loss": "損切り設定",
     "buy_today": "当日購入", "wait": "待機", "split_buy": "分割購入", "skip": "見送り",
 }
 
@@ -36,23 +42,12 @@ def _simulate(
     if horizon < 1 or entry == 0:
         return None
 
-    if action in ("hold", "add", "buy_today"):
+    if action in ("hold", "buy_today"):
         exit_p = window.iloc[-1]
         return {
             "ret": (exit_p - entry) / entry, "dd": (window.min() - entry) / entry,
             "hold_days": horizon, "wait_days": 0,
         }
-
-    if action == "sell":
-        # 「売却」は新規のwindowで評価するのではなく、取得価格(entry_price)を
-        # 基準にこれまでの含み損益を確定させる行動。取得価格が分からない場合は
-        # 損益を算出できないため、この局面は集計対象から除外する（Noneを返す）。
-        if entry_price is None or entry_price == 0:
-            return None
-        now_price = window.iloc[0]
-        ret = (now_price - entry_price) / entry_price
-        # 売却後は以降の値動きに晒されないため、ddはretと同一値とみなす
-        return {"ret": ret, "dd": ret, "hold_days": 0, "wait_days": 0}
 
     if action == "skip":
         # 「見送り」は新規購入を行わない行動のため、損益は常に発生しない
@@ -101,6 +96,43 @@ def _simulate(
     return None
 
 
+def _calc_sell_result(similar_df: pd.DataFrame, price: pd.DataFrame, entry_price: float | None) -> dict | None:
+    """「売却」の集計結果を1行分だけ算出する（horizonに依存しないため、horizonループを介さない）。
+
+    類似局面発生日の終値と取得価格(entry_price)だけで損益が確定する行動のため、
+    exit側（horizon経過後）のデータ有無は問わない。entry_idxが存在する局面は
+    すべて計算対象になる（horizonループ経由だと、horizonが大きいほど無関係に
+    除外されていたサンプル減少を無くすため）。取得価格が分からない場合は
+    集計不能としてNoneを返す。
+    """
+    if entry_price is None or entry_price == 0:
+        return None
+
+    rets = []
+    for date in similar_df["Date"].astype(str):
+        matches = price.index[price["Date"] == date]
+        if len(matches) == 0:
+            continue
+        entry_idx = matches[0]
+        now_price = price.loc[entry_idx, "Close"]
+        if now_price == 0 or pd.isna(now_price):
+            continue
+        rets.append((now_price - entry_price) / entry_price)
+
+    if not rets:
+        return None
+
+    r = pd.Series(rets)
+    return {
+        "Action": SELL_ACTION, "Horizon": None,
+        "AvgReturn": r.mean(), "WinRate": (r > 0).mean(),
+        # 売却後は以降の値動きに晒されないため、ddはretと同一値とみなす（_simulateの旧sell分岐と同じ方針）
+        "MaxLoss": r.min(), "MaxDrawdown": r.min(),
+        "AvgHoldDays": 0.0, "AvgWaitDays": 0.0,
+        "SampleSize": len(rets),
+    }
+
+
 def resolve_entry_price(price_df: pd.DataFrame, buy_date: str | None) -> float | None:
     """buy_date（購入日）に対応する終値を取得価格として返す。
 
@@ -135,6 +167,10 @@ def calc_demo_trade(
               sellの局面は算出できないため結果から除外される。
     wait_ratio: 「待機」行動での待機日数をhorizonに対する比率で指定する
                 （待機日数 = int(horizon * wait_ratio)、切り捨て）。
+
+    sell（売却）はhorizonに依存しない行動のため、horizonループの対象外とし
+    1回だけ集計する（結果行のHorizonはNoneになる）。exit側のデータ有無は問わないため、
+    horizonを跨いで無関係にサンプルが減ることもない（詳細は_calc_sell_result参照）。
     """
     if horizons is None:
         horizons = [5, 10, 20]
@@ -151,6 +187,12 @@ def calc_demo_trade(
     rows = []
 
     for action in actions:
+        if action == SELL_ACTION:
+            sell_row = _calc_sell_result(similar_df, price, entry_price)
+            if sell_row is not None:
+                rows.append(sell_row)
+            continue
+
         for horizon in horizons:
             rets, dds, holds, waits = [], [], [], []
             for date in similar_df["Date"].astype(str):
