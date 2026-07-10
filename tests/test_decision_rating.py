@@ -14,11 +14,16 @@ from logic.decision_rating import (
     SECTOR_VALIDITY_CONSISTENT,
     SECTOR_VALIDITY_REFERENCE,
     SECTOR_VALIDITY_UNJUDGEABLE,
+    SELL_FIXED_RATING,
+    SELL_FIXED_RISK_LEVEL,
+    SKIP_FIXED_RATING,
+    SKIP_FIXED_RISK_LEVEL,
     add_action_ratings,
     apply_hit_rate_floor,
     apply_significance_cap,
     judge_sector_validity,
     rank_rated_actions,
+    rate_action_row,
     rating_to_mark,
     risk_level,
 )
@@ -217,19 +222,71 @@ class ApplyHitRateFloorTest(unittest.TestCase):
         self.assertEqual(apply_hit_rate_floor(RATING_CONSIDERABLE, 0.9, True), RATING_NOT_RECOMMENDED)
 
 
-class RankRatedActionsSellDedupTest(unittest.TestCase):
-    def test_duplicate_sell_rows_collapse_to_one_within_normal_ranking(self) -> None:
+class RateActionRowSellTest(unittest.TestCase):
+    def test_sell_returns_fixed_values_without_scoring(self) -> None:
+        # sellは購入価格・現在値から一意に決まる確定値であり、他の引数（avg_return等が
+        # Noneでも）に関わらずスコア計算を経由せず固定のRiskLevel/Rating、Score=Noneを返す
+        result = rate_action_row(
+            "sell",
+            avg_return=0.05, win_rate=None, max_drawdown=None, horizon=None, hv=None,
+            single_stock_hit_rate=None, single_stock_avg_return=None, single_stock_p_value=None,
+            single_stock_p_value_is_reference=False, single_stock_insufficient_sample=True,
+            peer_avg_return=None,
+        )
+        self.assertEqual(result["RiskLevel"], SELL_FIXED_RISK_LEVEL)
+        self.assertEqual(result["Rating"], SELL_FIXED_RATING)
+        self.assertIsNone(result["Score"])
+
+    def test_sell_fixed_values_differ_from_skip(self) -> None:
+        # 「見送り」と区別できるよう、固定値は別の値にする
+        self.assertNotEqual(SELL_FIXED_RISK_LEVEL, SKIP_FIXED_RISK_LEVEL)
+        self.assertNotEqual(SELL_FIXED_RATING, SKIP_FIXED_RATING)
+
+
+class RankRatedActionsSellPlacementTest(unittest.TestCase):
+    def _rated_row(self, action: str, avg_return: float, score, rating: str, risk_level: str) -> dict:
+        return {
+            "Action": action, "Horizon": None, "AvgReturn": avg_return,
+            "Score": score, "Rating": rating, "RiskLevel": risk_level,
+        }
+
+    def test_sell_placed_after_scored_group_and_before_skip(self) -> None:
         rated_df = pd.DataFrame([
-            {"Action": "sell", "Horizon": None, "AvgReturn": 0.05, "Score": 3, "Rating": RATING_RECOMMENDED},
-            {"Action": "sell", "Horizon": None, "AvgReturn": 0.05, "Score": 3, "Rating": RATING_RECOMMENDED},
-            {"Action": "hold", "Horizon": 20, "AvgReturn": 0.01, "Score": 0, "Rating": RATING_CONSIDERABLE},
+            self._rated_row("sell", 0.05, None, SELL_FIXED_RATING, SELL_FIXED_RISK_LEVEL),
+            self._rated_row("hold", 0.01, 0, RATING_CONSIDERABLE, "中"),
+            self._rated_row("buy_today", 0.05, 3, RATING_RECOMMENDED, "低"),
+            self._rated_row("skip", 0.0, None, SKIP_FIXED_RATING, SKIP_FIXED_RISK_LEVEL),
+        ])
+
+        ranked_df = rank_rated_actions(rated_df)
+
+        # スコア対象群（推奨→検討可の評価順）→ sell（固定配置）→ skip（固定配置）の順になる
+        self.assertEqual(list(ranked_df["Action"]), ["buy_today", "hold", "sell", "skip"])
+
+    def test_duplicate_sell_rows_collapse_to_one_placed_before_skip(self) -> None:
+        rated_df = pd.DataFrame([
+            self._rated_row("sell", 0.05, None, SELL_FIXED_RATING, SELL_FIXED_RISK_LEVEL),
+            self._rated_row("sell", 0.05, None, SELL_FIXED_RATING, SELL_FIXED_RISK_LEVEL),
+            self._rated_row("hold", 0.01, 0, RATING_CONSIDERABLE, "中"),
         ])
 
         ranked_df = rank_rated_actions(rated_df)
 
         self.assertEqual((ranked_df["Action"] == "sell").sum(), 1)
-        # skipと違い固定最下位ではなく、通常の評価順ソートに含まれる（推奨のsellが1位）
-        self.assertEqual(ranked_df.iloc[0]["Action"], "sell")
+        self.assertEqual(ranked_df.iloc[-1]["Action"], "sell")
+
+    def test_sell_never_outranks_scored_group_regardless_of_avg_return(self) -> None:
+        # sellは採点対象外のため、AvgReturnがスコア対象群より高くても順位には影響しない
+        # （select_recommended_actionがscored群の先頭を返すことの前提を保証する）
+        rated_df = pd.DataFrame([
+            self._rated_row("sell", 0.50, None, SELL_FIXED_RATING, SELL_FIXED_RISK_LEVEL),
+            self._rated_row("hold", 0.01, 0, RATING_CONSIDERABLE, "中"),
+        ])
+
+        ranked_df = rank_rated_actions(rated_df)
+
+        self.assertEqual(ranked_df.iloc[0]["Action"], "hold")
+        self.assertEqual(ranked_df.iloc[1]["Action"], "sell")
 
 
 class JudgeSectorValidityTest(unittest.TestCase):

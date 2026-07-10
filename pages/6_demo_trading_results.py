@@ -4,8 +4,9 @@ import html
 
 import streamlit as st
 
-from logic.demo_trade import calc_demo_trade, HOLDING_ACTIONS, NEW_ACTIONS, ACTION_LABELS, SELL_ACTION
+from logic.demo_trade import calc_demo_trade, HOLDING_ACTIONS, NEW_ACTIONS, ACTION_LABELS, latest_close_price
 from logic.error_utils import show_error, show_warning
+from pages._decision_support_view import inject_styles, render_unrealized_pl_card
 
 COLUMN_LABELS = {
     "ActionLabel": "投資行動", "Horizon": "経過日数(営業日)", "AvgReturn": "平均リターン",
@@ -71,6 +72,7 @@ _STYLE = """
 
 st.title("デモトレード結果")
 st.markdown(_STYLE, unsafe_allow_html=True)
+inject_styles()  # render_unrealized_pl_card（pages/_decision_support_view.py）が使うds-*クラス用
 
 price_df = st.session_state.get("stock_price_df")
 similar_df = st.session_state.get("iwama_similar_periods_df")
@@ -88,6 +90,11 @@ if not stance:
     st.stop()
 st.badge(f"立場：{stance}", icon="🕒", color="blue")
 
+if stance == "すでに保有している":
+    purchase_price = st.session_state.get("purchase_price")
+    if purchase_price is not None:
+        render_unrealized_pl_card(purchase_price, latest_close_price(price_df))
+
 actions = HOLDING_ACTIONS if stance == "すでに保有している" else NEW_ACTIONS
 
 buy_date = st.session_state.get("purchase_date")
@@ -99,8 +106,10 @@ if result_df.empty:
     st.stop()
 
 horizon_choice = st.selectbox("比較する経過日数", [5, 10, 20], index=1)
-# sellはhorizon概念が無く常に1行のみ存在するため、選択中のhorizonに関わらず表示対象に含める
-horizon_result_df = result_df[(result_df["Horizon"] == horizon_choice) | (result_df["Action"] == SELL_ACTION)]
+# sellは今日時点の確定値1つのみで、他の行動のような予測分布を持たず比較する意味が
+# ないため、この画面の結果テーブル・グラフからは除外する（含み損益はrender_unrealized_pl_card
+# で別カード表示済み）。sellはHorizon=NoneのためHorizon一致条件だけで自然に除外される。
+horizon_result_df = result_df[result_df["Horizon"] == horizon_choice]
 
 st.subheader("結果サマリー")
 _summary_tiles = [
@@ -121,12 +130,10 @@ st.markdown(f'<div class="dt-summary-row">{_summary_tiles_html}</div>', unsafe_a
 st.subheader("詳細データ")
 display_df = horizon_result_df.copy()
 display_df["ActionLabel"] = display_df["Action"].map(ACTION_LABELS)
-# sellはhorizon概念が無くHorizonがNaNになるため、「―」で表示する。
-# 数値と文字列が混在する列だとpyarrowのArrow変換で型推定に失敗するため、他の行も
-# 文字列に揃える（他は従来通りの数値表記のまま、単位等は付けない）
-display_df["Horizon"] = display_df.apply(
-    lambda r: "―" if r["Action"] == SELL_ACTION else str(int(r["Horizon"])), axis=1
-)
+# horizon_result_dfはsell（Horizon=None）を含まないため、常に数値として整形できる。
+# 数値と文字列が混在する列だとpyarrowのArrow変換で型推定に失敗するため、文字列に揃える
+# （他は従来通りの数値表記のまま、単位等は付けない）
+display_df["Horizon"] = display_df["Horizon"].astype(int).astype(str)
 display_df = display_df[["ActionLabel", "Horizon", "AvgReturn", "WinRate", "MaxLoss", "MaxDrawdown", "AvgHoldDays"]]
 display_df = display_df.rename(columns=COLUMN_LABELS)
 display_df["平均リターン"] = display_df["平均リターン"].map(lambda x: f"{x:+.2%}")

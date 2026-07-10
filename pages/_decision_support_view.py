@@ -22,12 +22,14 @@ from logic.decision_rating import (
     SECTOR_VALIDITY_CONSISTENT,
     SECTOR_VALIDITY_REFERENCE,
     SECTOR_VALIDITY_UNJUDGEABLE,
+    SELL_FIXED_RATING,
+    SELL_FIXED_RISK_LEVEL,
     SIGNIFICANCE_PVALUE_REFERENCE_THRESHOLD,
     SIGNIFICANCE_PVALUE_THRESHOLD,
     SKIP_ACTION,
     rating_to_mark,
 )
-from logic.demo_trade import ACTION_LABELS
+from logic.demo_trade import ACTION_LABELS, SELL_ACTION, calc_unrealized_return
 from logic.error_utils import show_warning
 
 _STYLE = """
@@ -167,7 +169,11 @@ def _return_html(avg_return: float) -> str:
     return f'<span class="{css_class}">{avg_return:+.2%}</span>'
 
 
-def _winrate_html(win_rate: float) -> str:
+def _winrate_html(win_rate: float | None) -> str:
+    # sell（売却）は確定値1つのみで勝率という概念が無くWinRate=Noneのため、
+    # バー付き表示はせずSELL_FIXED_RISK_LEVEL（－）と同じダッシュのみ表示する。
+    if win_rate is None or pd.isna(win_rate):
+        return SELL_FIXED_RISK_LEVEL
     width = max(0.0, min(1.0, win_rate)) * 100
     return (
         f'<span class="ds-winrate-bar-track">'
@@ -183,6 +189,22 @@ def _risk_pill_html(risk_level: str) -> str:
 def _rating_pill_html(rating: str) -> str:
     css_class = _RATING_PILL_CLASS.get(rating, "ds-pill-rating-not_recommended")
     return f'<span class="ds-pill {css_class}">{rating}</span>'
+
+
+def _risk_cell_html(risk_level: str) -> str:
+    """sell（売却）のRiskLevel固定値（SELL_FIXED_RISK_LEVEL）にはCSSの色分けクラスが
+    無いため、ピルで包まずプレーンテキストのまま表示する。"""
+    if risk_level == SELL_FIXED_RISK_LEVEL:
+        return risk_level
+    return _risk_pill_html(risk_level)
+
+
+def _rating_cell_html(rating: str) -> str:
+    """sell（売却）のRating固定値（SELL_FIXED_RATING、空文字列）は、そのままだと
+    空のピルが出てしまうため、ダッシュのプレーンテキストで表示する。"""
+    if rating == SELL_FIXED_RATING:
+        return SELL_FIXED_RISK_LEVEL
+    return _rating_pill_html(rating)
 
 
 def render_conclusion_card(
@@ -213,40 +235,54 @@ def render_conclusion_card(
         non_skip_df = ranked_df[ranked_df["Action"] != SKIP_ACTION]
         best_return_row = non_skip_df.loc[non_skip_df["AvgReturn"].idxmax()] if not non_skip_df.empty else None
 
-        st.markdown(
-            f'<div class="ds-action-tile">'
-            f'<div class="ds-action-tile-label">📅 おすすめ行動</div>'
-            f'<div class="ds-action-tile-value">{_action_label(recommended_row)}</div>'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        if recommended_row["Rating"] == RATING_NOT_RECOMMENDED:
+            # 全行動が非推奨だった場合、ranked_dfの先頭行（相対的にマシだった非推奨行動）を
+            # 「おすすめ」と誤解されないよう、おすすめ行動タイルは出さず警告＋参考情報にとどめる。
+            show_warning(
+                "今回は推奨できる投資行動がありませんでした。"
+                "最も成績が良かった行動でも「非推奨」判定のため、様子見（見送り）も選択肢としてご検討ください。"
+            )
+            st.markdown(
+                f'<div class="ds-desc-text">参考（非推奨）：'
+                f'「{_action_label(recommended_row)}」が候補の中では相対的に良い結果でしたが、'
+                f"統計的な裏付けは確認できていません。</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<div class="ds-action-tile">'
+                f'<div class="ds-action-tile-label">📅 おすすめ行動</div>'
+                f'<div class="ds-action-tile-value">{_action_label(recommended_row)}</div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-        best_return_sub = ""
-        if best_return_row is not None:
-            best_return_sub = f'<div class="ds-metric-tile-sub">{_action_label(best_return_row)}</div>'
+            best_return_sub = ""
+            if best_return_row is not None:
+                best_return_sub = f'<div class="ds-metric-tile-sub">{_action_label(best_return_row)}</div>'
 
-        st.markdown(
-            f'<div class="ds-metric-row">'
-            f'<div class="ds-metric-tile ds-metric-green">'
-            f'<div class="ds-metric-tile-label">📈 平均リターン</div>'
-            f'<div class="ds-metric-tile-value">{recommended_row["AvgReturn"]:+.2%}</div></div>'
-            f'<div class="ds-metric-tile ds-metric-blue">'
-            f'<div class="ds-metric-tile-label">🥧 勝率</div>'
-            f'<div class="ds-metric-tile-value">{recommended_row["WinRate"]:.0%}</div></div>'
-            f'<div class="ds-metric-tile ds-metric-amber">'
-            f'<div class="ds-metric-tile-label">⭐ 参考：最良結果</div>'
-            f'<div class="ds-metric-tile-value">{best_return_sub}</div></div>'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+            st.markdown(
+                f'<div class="ds-metric-row">'
+                f'<div class="ds-metric-tile ds-metric-green">'
+                f'<div class="ds-metric-tile-label">📈 平均リターン</div>'
+                f'<div class="ds-metric-tile-value">{recommended_row["AvgReturn"]:+.2%}</div></div>'
+                f'<div class="ds-metric-tile ds-metric-blue">'
+                f'<div class="ds-metric-tile-label">🥧 勝率</div>'
+                f'<div class="ds-metric-tile-value">{recommended_row["WinRate"]:.0%}</div></div>'
+                f'<div class="ds-metric-tile ds-metric-amber">'
+                f'<div class="ds-metric-tile-label">⭐ 参考：最良結果</div>'
+                f'<div class="ds-metric-tile-value">{best_return_sub}</div></div>'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-        st.markdown(
-            f'<div class="ds-desc-text">過去の類似局面では、'
-            f'「{_action_label(recommended_row)}」が平均的に良い結果でした'
-            f'（平均リターン{recommended_row["AvgReturn"]:+.2%}、勝率{recommended_row["WinRate"]:.0%}）。'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+            st.markdown(
+                f'<div class="ds-desc-text">過去の類似局面では、'
+                f'「{_action_label(recommended_row)}」が平均的に良い結果でした'
+                f'（平均リターン{recommended_row["AvgReturn"]:+.2%}、勝率{recommended_row["WinRate"]:.0%}）。'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
         if sector_validity_label is not None:
             description = _SECTOR_VALIDITY_DESCRIPTIONS.get(sector_validity_label, "")
@@ -255,6 +291,42 @@ def render_conclusion_card(
                 f'（{description}）</div>',
                 unsafe_allow_html=True,
             )
+
+
+def render_unrealized_pl_card(purchase_price: float | None, current_price: float | None) -> None:
+    """「現在の含み損益」カードを表示する。
+
+    「今日売る」の損益は購入価格と現在値だけで一意に決まる確定値であり、他の投資行動
+    （hold・buy_today等）のような過去の類似局面に基づく予測分布ではないため、結論カードや
+    比較表（推奨/検討可/非推奨の判定・順位付け）とは別の独立カードとして表示する。
+    purchase_price/current_priceのいずれかが取得できずcalc_unrealized_returnがNoneを
+    返す場合は何も表示しない（stance="これから購入する"の場合はそもそも呼び出さない想定）。
+    """
+    confirmed_return = calc_unrealized_return(purchase_price, current_price)
+    if confirmed_return is None:
+        return
+
+    css_class = "ds-return-pos" if confirmed_return > 0 else "ds-return-neg"
+
+    with st.container(border=True):
+        st.markdown(
+            '<div class="ds-card-header">'
+            '<div class="ds-card-title">📌 現在の含み損益</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div class="ds-action-tile">'
+            f'<div class="ds-action-tile-label">今すぐ売却した場合の確定リターン</div>'
+            f'<div class="ds-action-tile-value"><span class="{css_class}">{confirmed_return:+.2%}</span></div>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<div class="ds-desc-text">購入価格 {purchase_price:,.1f} → 現在値 {current_price:,.1f}'
+            f'（差額 {current_price - purchase_price:+,.1f}）</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def render_comparison_table(ranked_df: pd.DataFrame) -> None:
@@ -273,17 +345,26 @@ def render_comparison_table(ranked_df: pd.DataFrame) -> None:
             return
 
         rows_html = []
+        has_sell_row = False
         for _, row in ranked_df.iterrows():
-            rank = int(row["Rank"])
-            rank_label = f'{_MEDALS.get(rank, "")} {rank}位'.strip()
+            is_sell = row["Action"] == SELL_ACTION
+            has_sell_row = has_sell_row or is_sell
+            if is_sell:
+                # sellは購入価格・現在値から一意に決まる確定値で採点・順位付けの対象外
+                # （rank_rated_actions参照）のため、Rank列に振られた通し番号は表示せず
+                # ダッシュにする（下部の注記で理由を説明する）。
+                rank_label = SELL_FIXED_RISK_LEVEL
+            else:
+                rank = int(row["Rank"])
+                rank_label = f'{_MEDALS.get(rank, "")} {rank}位'.strip()
             rows_html.append(
                 "<tr>"
                 f"<td>{rank_label}</td>"
                 f"<td>{_comparison_action_label(row)}</td>"
                 f"<td>{_return_html(row['AvgReturn'])}</td>"
                 f"<td>{_winrate_html(row['WinRate'])}</td>"
-                f"<td>{_risk_pill_html(row['RiskLevel'])}</td>"
-                f"<td>{_rating_pill_html(row['Rating'])}</td>"
+                f"<td>{_risk_cell_html(row['RiskLevel'])}</td>"
+                f"<td>{_rating_cell_html(row['Rating'])}</td>"
                 "</tr>"
             )
 
@@ -295,6 +376,15 @@ def render_comparison_table(ranked_df: pd.DataFrame) -> None:
             + "".join(rows_html) + "</tbody></table>"
         )
         st.markdown(table_html, unsafe_allow_html=True)
+
+        if has_sell_row:
+            st.markdown(
+                '<div class="ds-stat-note">ℹ️ 「売却」は購入価格と現在値から一意に決まる確定値であり、'
+                "他の投資行動のような過去の類似局面に基づく予測比較の対象ではないため、"
+                "順位・評価（ランキング）の対象外とし「－」で表示しています。現在の含み損益は"
+                '上部の「📌 現在の含み損益」カードをご覧ください。</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def _pick_best_return(non_skip_df: pd.DataFrame) -> pd.Series | None:

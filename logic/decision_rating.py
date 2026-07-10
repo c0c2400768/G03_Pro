@@ -29,7 +29,11 @@ SKIP_FIXED_RATING = RATING_NOT_RECOMMENDED
 SKIP_FIXED_RISK_LEVEL = "なし"
 
 # 「売却」はhorizon（経過日数）概念が無い行動。単一ソース（logic/demo_trade.py）の定義を
-# 参照する。rank_rated_actionsでのdedup判定にのみ使う（skipと違い採点対象からは除外しない）
+# 参照する。「今日売る」の損益は購入価格と現在値だけで一意に決まる確定値であり、
+# calc_demo_trade側で予測分布を持たなくなったため、見送りと同様に採点対象外として扱う
+# （skipとは区別できるよう、固定のRiskLevel/Ratingは別の値にする。rate_action_row参照）。
+SELL_FIXED_RISK_LEVEL = "－"
+SELL_FIXED_RATING = ""
 
 # 比較表の並び替えで使う評価の優先順位（数値が大きいほど上位）
 RATING_RANK = {RATING_RECOMMENDED: 2, RATING_CONSIDERABLE: 1, RATING_NOT_RECOMMENDED: 0}
@@ -214,9 +218,14 @@ def rate_action_row(
 
     action=="skip"（見送り）は採点対象外のため、固定の判定を返す
     （安全装置のキャップも適用しない＝常に非推奨のまま）。
+    action=="sell"（売却）も、購入価格と現在値から一意に決まる確定値であり予測分布を
+    前提にした採点にはなじまないため、同様に採点対象外として固定の判定を返す
+    （skipとは区別できるよう、RiskLevel/RatingはSELL_FIXED_*の別の値を使う）。
     """
     if action == SKIP_ACTION:
         return {"RiskLevel": SKIP_FIXED_RISK_LEVEL, "Score": None, "Rating": SKIP_FIXED_RATING}
+    if action == SELL_ACTION:
+        return {"RiskLevel": SELL_FIXED_RISK_LEVEL, "Score": None, "Rating": SELL_FIXED_RATING}
 
     score = compute_score(avg_return, win_rate, max_drawdown, hv, horizon)
     rating = apply_significance_cap(
@@ -273,29 +282,30 @@ def add_action_ratings(
 def rank_rated_actions(rated_df: pd.DataFrame) -> pd.DataFrame:
     """比較表示用に順位付けしたdfを返す。
 
-    「見送り」以外は 評価（推奨→検討可→非推奨）→スコア→平均リターン の順で並べ、
+    スコア対象群（見送り・売却を除く）は 評価（推奨→検討可→非推奨）→スコア→平均リターン
+    の順で並べる。
     「見送り」は採点対象外のため常に最後の1行にまとめて固定表示する
     （Horizon違いで複製された行は同一結果になるため代表1行のみ残す）。
-    「売却」はhorizon概念が無く本来複製されないが、念のため同様に代表1行のみ残す
-    （見送りと異なり採点対象なので、固定位置ではなく通常の評価順ソートに含める）。
+    「売却」も、購入価格と現在値から一意に決まる確定値であり採点対象外のため、
+    スコア対象群の直後・見送りの直前に固定配置する（horizon概念が無く本来複製されないが、
+    念のため同様に代表1行のみ残す）。
     Rank列（1始まり）を付加して返す。
     """
     if rated_df is None or rated_df.empty:
         return rated_df
 
-    non_skip = rated_df[rated_df["Action"] != SKIP_ACTION].copy()
+    scored = rated_df[~rated_df["Action"].isin([SKIP_ACTION, SELL_ACTION])].copy()
+    sell_rows = rated_df[rated_df["Action"] == SELL_ACTION]
     skip_rows = rated_df[rated_df["Action"] == SKIP_ACTION]
 
-    sell_mask = non_skip["Action"] == SELL_ACTION
-    if sell_mask.sum() > 1:
-        non_skip = pd.concat([non_skip[~sell_mask], non_skip[sell_mask].iloc[[0]]], ignore_index=True)
-
-    non_skip["_rating_rank"] = non_skip["Rating"].map(RATING_RANK)
-    non_skip = non_skip.sort_values(
+    scored["_rating_rank"] = scored["Rating"].map(RATING_RANK)
+    scored = scored.sort_values(
         by=["_rating_rank", "Score", "AvgReturn"], ascending=[False, False, False]
     ).drop(columns="_rating_rank")
 
-    parts = [non_skip]
+    parts = [scored]
+    if not sell_rows.empty:
+        parts.append(sell_rows.iloc[[0]])
     if not skip_rows.empty:
         parts.append(skip_rows.iloc[[0]])
 

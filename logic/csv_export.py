@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from logic.decision_rating import SKIP_ACTION, rating_to_mark
+from logic.decision_rating import SELL_FIXED_RATING, SELL_FIXED_RISK_LEVEL, SKIP_ACTION, rating_to_mark
 from logic.demo_trade import ACTION_LABELS, SELL_ACTION
 from logic.ticker_lookup import get_company_name
 
@@ -83,11 +83,17 @@ def build_decision_support_export(
     df["ActionLabel"] = df.apply(_format_action_label, axis=1)
     df["HorizonLabel"] = df.apply(_format_horizon, axis=1)
     df["AvgReturnLabel"] = df["AvgReturn"].map(lambda x: f"{x:+.2%}")
-    df["WinRateLabel"] = df["WinRate"].map(lambda x: f"{x:.1%}")
-    df["MaxLossLabel"] = df["MaxLoss"].map(lambda x: f"{x:+.2%}")
-    df["MaxDrawdownLabel"] = df["MaxDrawdown"].map(lambda x: f"{x:+.2%}")
+    # sell（売却）は確定値1つのみでWinRate/MaxLoss/MaxDrawdownという概念が無くNoneのため、
+    # SampleSizeLabelと同様にpd.notna()でガードして「―」を返す
+    df["WinRateLabel"] = df["WinRate"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "―")
+    df["MaxLossLabel"] = df["MaxLoss"].map(lambda x: f"{x:+.2%}" if pd.notna(x) else "―")
+    df["MaxDrawdownLabel"] = df["MaxDrawdown"].map(lambda x: f"{x:+.2%}" if pd.notna(x) else "―")
     df["AvgHoldDaysLabel"] = df["AvgHoldDays"].map(lambda x: f"{x:.1f}日")
     df["SampleSizeLabel"] = df["SampleSize"].map(lambda x: f"{int(x)}件" if pd.notna(x) else "―")
+    # sellのRiskLevel/Ratingは画面表示（pages/_decision_support_view.py）と同じ固定値
+    # （SELL_FIXED_RISK_LEVEL="－"、SELL_FIXED_RATING=""）のため、Ratingの空文字列は
+    # CSV上も同じダッシュで出力されるようにする（RiskLevelは元々ダッシュなのでそのままでよい）
+    df["Rating"] = df["Rating"].map(lambda x: SELL_FIXED_RISK_LEVEL if x == SELL_FIXED_RATING else x)
 
     export_df = df[_EXPORT_COLUMN_ORDER].rename(columns=_EXPORT_COLUMN_LABELS)
 

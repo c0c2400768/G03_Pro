@@ -11,6 +11,7 @@ from logic.decision_rating import (
     rank_rated_actions,
     select_recommended_action,
 )
+from logic.demo_trade import latest_close_price
 from logic.error_utils import show_warning
 from logic.indicators import calc_hv
 from logic.validation import run_peer_universe_validation, run_single_stock_validation
@@ -20,6 +21,7 @@ from pages._decision_support_view import (
     render_conclusion_card,
     render_decision_angles,
     render_disclaimer_footer,
+    render_unrealized_pl_card,
 )
 from pages._validation_view import render_validation_detail_section
 
@@ -138,6 +140,12 @@ sector_validity_label = judge_sector_validity(peer_p_value, single_stock_avg_ret
 
 # --- 結論カード -------------------------------------------------------------
 render_conclusion_card(recommended_row, ranked_df, stance, sector_validity_label)
+
+# --- 現在の含み損益（結論カードとは独立の確定値カード） -----------------------------
+if stance == "すでに保有している":
+    purchase_price = st.session_state.get("purchase_price")
+    if purchase_price is not None:
+        render_unrealized_pl_card(purchase_price, latest_close_price(price_df))
 
 # --- 投資行動の比較表 --------------------------------------------------------
 render_comparison_table(ranked_df)
