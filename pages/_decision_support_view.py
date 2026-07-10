@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import html
+
 import pandas as pd
 import streamlit as st
 
@@ -20,6 +22,8 @@ from logic.decision_rating import (
     SECTOR_VALIDITY_CONSISTENT,
     SECTOR_VALIDITY_REFERENCE,
     SECTOR_VALIDITY_UNJUDGEABLE,
+    SIGNIFICANCE_PVALUE_REFERENCE_THRESHOLD,
+    SIGNIFICANCE_PVALUE_THRESHOLD,
     SKIP_ACTION,
     rating_to_mark,
 )
@@ -59,14 +63,14 @@ _STYLE = """
 .ds-winrate-bar-track { background:#e5e7eb; border-radius:999px; height:6px; width:70px; display:inline-block; vertical-align:middle; margin-right:8px; }
 .ds-winrate-bar-fill { background:#22c55e; border-radius:999px; height:6px; display:inline-block; }
 
-.ds-pill { padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; white-space:nowrap; }
+.ds-pill { padding:3px 10px; border-radius:999px; font-size:13px; font-weight:600; white-space:nowrap; }
 .ds-pill-risk-低 { background:#dcfce7; color:#15803d; }
 .ds-pill-risk-中 { background:#fef3c7; color:#92400e; }
 .ds-pill-risk-高 { background:#fee2e2; color:#b91c1c; }
 .ds-pill-risk-なし { background:#f3f4f6; color:#6b7280; }
 .ds-pill-rating-recommended { background:#dcfce7; color:#15803d; }
 .ds-pill-rating-considerable { background:#dbeafe; color:#1d4ed8; }
-.ds-pill-rating-not_recommended { background:#f3f4f6; color:#6b7280; }
+.ds-pill-rating-not_recommended { background:#f3f4f6; color:#4b5563; }
 
 /* margin-bottom:16pxは、st.markdownのラッパー要素(stMarkdownContainer)がst側で
    margin-bottom:-16pxを持つため、その分を打ち消してst.container(border=True)の
@@ -89,6 +93,8 @@ _STYLE = """
 .ds-stat-title { font-size:16px; font-weight:700; color:#1f2937; margin-bottom:4px; }
 .ds-stat-desc { font-size:13px; color:#6b7280; }
 .ds-stat-note { font-size:12px; color:#6b7280; margin:4px 0 12px 0; }
+
+.ds-th-info { cursor:help; color:#9ca3af; font-size:11px; margin-left:2px; }
 </style>
 """
 
@@ -99,6 +105,28 @@ _RATING_PILL_CLASS = {
 }
 
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+# 比較表の列見出しに添えるiマークのツールチップ文言（title属性で表示）。
+# 既存の推奨/検討可/非推奨の判定ロジックには影響しない表示専用の説明。
+_COMPARISON_COLUMN_TOOLTIPS = {
+    "平均リターン": "過去の類似局面を起点に、この投資行動を取った場合のリターンの平均値です。",
+    "勝率": "過去の類似局面のうち、リターンがプラスになった割合です。",
+    "リスク": (
+        "この銘柄の値動きの大きさ（HV）を基準にした、最大ドローダウンの相対的な大きさです"
+        "（低/中/高）。HVが算出できない場合は固定の閾値（3%/6%）で判定します。"
+    ),
+    "評価": (
+        "平均リターン・勝率・リスクの3項目を均等に採点したスコアに、単体銘柄の統計的有意性チェック"
+        "（p値・方向一致・的中率）による安全装置を適用した最終判定です。"
+    ),
+}
+
+
+def _comparison_th_html(label: str) -> str:
+    tooltip = _COMPARISON_COLUMN_TOOLTIPS.get(label)
+    if tooltip is None:
+        return f"<th>{label}</th>"
+    return f'<th>{label} <span class="ds-th-info" title="{html.escape(tooltip)}">ℹ️</span></th>'
 
 # judge_sector_validity（業種内整合性）の各ラベルの意味を、目視で確認しやすいよう
 # 一言補足として併記する。既存の推奨/検討可/非推奨の判定ロジックには影響しない表示専用の説明
@@ -259,10 +287,12 @@ def render_comparison_table(ranked_df: pd.DataFrame) -> None:
                 "</tr>"
             )
 
+        headers_html = "".join(
+            _comparison_th_html(label) for label in ["順位", "投資行動", "平均リターン", "勝率", "リスク", "評価"]
+        )
         table_html = (
-            '<table class="ds-table"><thead><tr>'
-            "<th>順位</th><th>投資行動</th><th>平均リターン</th><th>勝率</th><th>リスク</th><th>評価</th>"
-            "</tr></thead><tbody>" + "".join(rows_html) + "</tbody></table>"
+            "<table class=\"ds-table\"><thead><tr>" + headers_html + "</tr></thead><tbody>"
+            + "".join(rows_html) + "</tbody></table>"
         )
         st.markdown(table_html, unsafe_allow_html=True)
 
@@ -364,7 +394,9 @@ def render_disclaimer_footer(
         and peer_avg_return is not None
         and ((single_stock_avg_return > 0 and peer_avg_return > 0) or (single_stock_avg_return < 0 and peer_avg_return < 0))
     )
-    p_value_threshold = 0.10 if single_stock_p_value_is_reference else 0.05
+    p_value_threshold = (
+        SIGNIFICANCE_PVALUE_REFERENCE_THRESHOLD if single_stock_p_value_is_reference else SIGNIFICANCE_PVALUE_THRESHOLD
+    )
     p_value_ok = single_stock_p_value is not None and single_stock_p_value < p_value_threshold
 
     if single_stock_insufficient_sample:
@@ -375,6 +407,9 @@ def render_disclaimer_footer(
         note = "統計検証はまだ強い優位性を示す段階ではありません。実運用では他の指標と併用してください。"
 
     st.markdown(
-        f'<div class="ds-footer">⭐ 今回のおすすめは「{label}」です。{note}</div>',
+        f'<div class="ds-footer">⭐ 今回のおすすめは「{label}」です。{note}<br/><br/>'
+        "📊 このおすすめ行動は、複数の投資行動パターンを比較し、その中で最も成績が良かったものを"
+        "選んでいます。比較する候補が多いほど、実際の実力より良い結果に見えやすくなる統計的な性質が"
+        "あるため、参考情報の一つとしてご覧ください。</div>",
         unsafe_allow_html=True,
     )

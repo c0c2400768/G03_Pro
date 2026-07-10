@@ -66,16 +66,35 @@ peer_fetch_period = "10年" if period == "任意" else period
 single_stock_result = None
 peer_result = None
 if price_df is not None and not price_df.empty and ticker:
-    validation_key = (ticker, period, stance)
+    # run_single_stock_validation / run_peer_universe_validationはどちらもstanceを
+    # 引数に取らず結果もstanceに依存しないため、キャッシュキーには含めない
+    # （含めると「すでに保有している」⇄「これから購入する」の切り替えのたびに
+    # 無駄な再計算が発生してしまう）。
+    validation_key = (ticker, period)
     if (
         st.session_state.get("validation_cache_key") == validation_key
         and "validation_cache_value" in st.session_state
     ):
         single_stock_result, peer_result = st.session_state["validation_cache_value"]
     else:
+        # run_peer_universe_validationはpeer最大20〜30社分のwalk-forward検証をループするため
+        # 時間がかかる。progress_callback（対象社数のうちの完了社数を通知するだけの単純な
+        # コールバック。logic側にStreamlit依存は持ち込まない）を使って実際の進捗を表示する。
         with st.spinner("検証データを計算中..."):
+            progress_bar = st.progress(0, text="検証データを計算中...(0%)")
             single_stock_result = run_single_stock_validation(price_df)
-            peer_result = run_peer_universe_validation(ticker, price_df, peer_fetch_period)
+            progress_bar.progress(10, text="検証データを計算中...(10%)")
+
+            def _update_peer_progress(done: int, total: int) -> None:
+                percent = 10 + int(done / total * 90) if total else 100
+                progress_bar.progress(percent, text=f"検証データを計算中...({percent}%)")
+
+            peer_result = run_peer_universe_validation(
+                ticker, price_df, peer_fetch_period, progress_callback=_update_peer_progress
+            )
+            progress_bar.progress(100, text="検証データを計算中...(100%)")
+            progress_bar.empty()
+
         st.session_state["validation_cache_key"] = validation_key
         st.session_state["validation_cache_value"] = (single_stock_result, peer_result)
 

@@ -84,11 +84,15 @@ if st.button("分析開始", type="primary"):
         show_error("「すでに保有している」を選択した場合は、購入日を入力してください。")
     else:
         with st.spinner("株価データを取得中..."):
+            progress_bar = st.progress(0, text="株価データを取得中...(0%)")
             if period_choice == "任意":
                 # 【暫定対応】get_stock_dataはperiod文字列のみ対応のため、
                 # 10年分を取得してから日付でフィルタする。要：太刀岡さんへの仕様確認。
+                progress_bar.progress(15, text="株価データを取得中...(15%)")
                 stock_df_full = get_stock_data(ticker_clean, "10年")
+                progress_bar.progress(55, text="株価データを取得中...(55%)")
                 index_df_full = get_index_data("10年")
+                progress_bar.progress(85, text="株価データを取得中...(85%)")
                 if not stock_df_full.empty:
                     mask = (stock_df_full["Date"] >= str(custom_start)) & (
                         stock_df_full["Date"] <= str(custom_end)
@@ -104,8 +108,12 @@ if st.button("分析開始", type="primary"):
                 else:
                     index_df = index_df_full
             else:
+                progress_bar.progress(15, text="株価データを取得中...(15%)")
                 stock_df = get_stock_data(ticker_clean, period_choice)
+                progress_bar.progress(55, text="株価データを取得中...(55%)")
                 index_df = get_index_data(period_choice)
+            progress_bar.progress(100, text="株価データを取得中...(100%)")
+            progress_bar.empty()
 
         if stock_df.empty:
             show_error(

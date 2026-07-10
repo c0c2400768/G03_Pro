@@ -95,6 +95,9 @@ def build_decision_support_export(
         f"銘柄,{get_company_name(ticker)}（{ticker}）",
         f"立場,{stance}",
         f"出力日時,{generated_at.strftime('%Y-%m-%d %H:%M')}",
+        "注意,このおすすめ行動は、複数の投資行動パターンを比較し、その中で最も成績が良かったものを"
+        "選んでいます。比較する候補が多いほど、実際の実力より良い結果に見えやすくなる統計的な性質が"
+        "あるため、参考情報の一つとしてご覧ください。",
         "",
     ]
     return "\n".join(header_lines) + export_df.to_csv(index=False)

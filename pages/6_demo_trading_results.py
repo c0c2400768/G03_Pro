@@ -1,5 +1,7 @@
 """岩間担当：デモトレード結果詳細画面（pages/6_demo_trading_results.py）"""
 
+import html
+
 import streamlit as st
 
 from logic.demo_trade import calc_demo_trade, HOLDING_ACTIONS, NEW_ACTIONS, ACTION_LABELS, SELL_ACTION
@@ -9,6 +11,40 @@ COLUMN_LABELS = {
     "ActionLabel": "投資行動", "Horizon": "経過日数(営業日)", "AvgReturn": "平均リターン",
     "WinRate": "勝率", "MaxLoss": "最大損失", "MaxDrawdown": "最大ドローダウン", "AvgHoldDays": "平均保有日数",
 }
+
+# 結果サマリーの各タイルに添えるiマークのツールチップ文言（title属性で表示）。
+# 初心者が意味を誤解しやすい指標の補足説明であり、値そのものの算出ロジックには影響しない。
+_SUMMARY_TILE_TOOLTIPS = {
+    "📈 平均リターン（全行動平均）": (
+        "選択した経過日数で、各投資行動を取った場合のリターン（値上がり・値下がり率）の平均を、"
+        "さらに全行動で平均した値です。プラスなら値上がり、マイナスなら値下がりを意味します。"
+    ),
+    "🎯 平均勝率（全行動平均）": (
+        "過去の類似局面のうち、リターンがプラスになった割合（勝率）を全行動で平均した値です。"
+        "100%に近いほど、過去は当たりやすかったことを示します。"
+    ),
+    "📉 平均最大損失（全行動平均）": (
+        "各投資行動のうち最も損失が大きかったケースのリターンを、全行動で平均した値です。"
+        "実際に起こりうる下振れの目安として参考にしてください。"
+    ),
+    "📅 平均保有日数（全行動平均）": (
+        "類似局面の発生から実際に売買が完了するまでの平均保有日数を、全行動で平均した値です。"
+    ),
+    "📄 検証件数（全行動平均）": (
+        "各投資行動の結果算出に使われた過去の類似局面の件数（サンプル数）を、全行動で平均した値です。"
+        "件数が少ないほど結果の信頼度は下がります。"
+    ),
+}
+
+
+def _summary_tile_label_html(label: str) -> str:
+    tooltip = _SUMMARY_TILE_TOOLTIPS.get(label)
+    if tooltip is None:
+        return f'<div class="dt-summary-tile-label">{label}</div>'
+    return (
+        f'<div class="dt-summary-tile-label">{label} '
+        f'<span class="dt-info" title="{html.escape(tooltip)}">ℹ️</span></div>'
+    )
 
 _STYLE = """
 <style>
@@ -29,6 +65,7 @@ _STYLE = """
 .dt-summary-amber .dt-summary-tile-value { color:#92400e; }
 .dt-summary-purple { background:#f5f0fb; }
 .dt-summary-purple .dt-summary-tile-value { color:#6d28d9; }
+.dt-info { cursor:help; color:#9ca3af; font-size:11px; margin-left:2px; }
 </style>
 """
 
@@ -66,26 +103,20 @@ horizon_choice = st.selectbox("比較する経過日数", [5, 10, 20], index=1)
 horizon_result_df = result_df[(result_df["Horizon"] == horizon_choice) | (result_df["Action"] == SELL_ACTION)]
 
 st.subheader("結果サマリー")
-st.markdown(
-    '<div class="dt-summary-row">'
-    '<div class="dt-summary-tile dt-summary-green">'
-    '<div class="dt-summary-tile-label">📈 平均リターン（全行動平均）</div>'
-    f'<div class="dt-summary-tile-value">{horizon_result_df["AvgReturn"].mean():+.2%}</div></div>'
-    '<div class="dt-summary-tile dt-summary-blue">'
-    '<div class="dt-summary-tile-label">🎯 平均勝率（全行動平均）</div>'
-    f'<div class="dt-summary-tile-value">{horizon_result_df["WinRate"].mean():.1%}</div></div>'
-    '<div class="dt-summary-tile dt-summary-red">'
-    '<div class="dt-summary-tile-label">📉 平均最大損失（全行動平均）</div>'
-    f'<div class="dt-summary-tile-value">{horizon_result_df["MaxLoss"].mean():+.1%}</div></div>'
-    '<div class="dt-summary-tile dt-summary-amber">'
-    '<div class="dt-summary-tile-label">📅 平均保有日数（全行動平均）</div>'
-    f'<div class="dt-summary-tile-value">{horizon_result_df["AvgHoldDays"].mean():.1f}日</div></div>'
-    '<div class="dt-summary-tile dt-summary-purple">'
-    '<div class="dt-summary-tile-label">📄 検証件数（全行動平均）</div>'
-    f'<div class="dt-summary-tile-value">{horizon_result_df["SampleSize"].mean():.0f}件</div></div>'
-    "</div>",
-    unsafe_allow_html=True,
+_summary_tiles = [
+    ("dt-summary-green", "📈 平均リターン（全行動平均）", f'{horizon_result_df["AvgReturn"].mean():+.2%}'),
+    ("dt-summary-blue", "🎯 平均勝率（全行動平均）", f'{horizon_result_df["WinRate"].mean():.1%}'),
+    ("dt-summary-red", "📉 平均最大損失（全行動平均）", f'{horizon_result_df["MaxLoss"].mean():+.1%}'),
+    ("dt-summary-amber", "📅 平均保有日数（全行動平均）", f'{horizon_result_df["AvgHoldDays"].mean():.1f}日'),
+    ("dt-summary-purple", "📄 検証件数（全行動平均）", f'{horizon_result_df["SampleSize"].mean():.0f}件'),
+]
+_summary_tiles_html = "".join(
+    f'<div class="dt-summary-tile {css_class}">'
+    + _summary_tile_label_html(label)
+    + f'<div class="dt-summary-tile-value">{value}</div></div>'
+    for css_class, label, value in _summary_tiles
 )
+st.markdown(f'<div class="dt-summary-row">{_summary_tiles_html}</div>', unsafe_allow_html=True)
 
 st.subheader("詳細データ")
 display_df = horizon_result_df.copy()

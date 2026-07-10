@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from logic.demo_trade import SELL_ACTION
+
 # リスク（最大ドローダウンの絶対値）の閾値。3%未満=低、3%以上6%以下=中、6%超=高。
 # スイングトレード想定での一般的な下振れ許容目安として設定した固定値であり、
 # 本来は_hv_relative_thresholdsによる銘柄自身のHV基準の相対閾値を優先する。
@@ -26,9 +28,8 @@ SKIP_ACTION = "skip"
 SKIP_FIXED_RATING = RATING_NOT_RECOMMENDED
 SKIP_FIXED_RISK_LEVEL = "なし"
 
-# 「売却」はhorizon（経過日数）概念が無い行動（logic/demo_trade.py参照）。
-# rank_rated_actionsでのdedup判定にのみ使う（skipと違い採点対象からは除外しない）
-SELL_ACTION = "sell"
+# 「売却」はhorizon（経過日数）概念が無い行動。単一ソース（logic/demo_trade.py）の定義を
+# 参照する。rank_rated_actionsでのdedup判定にのみ使う（skipと違い採点対象からは除外しない）
 
 # 比較表の並び替えで使う評価の優先順位（数値が大きいほど上位）
 RATING_RANK = {RATING_RECOMMENDED: 2, RATING_CONSIDERABLE: 1, RATING_NOT_RECOMMENDED: 0}
