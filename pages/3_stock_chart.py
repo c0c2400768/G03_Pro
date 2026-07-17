@@ -11,13 +11,14 @@ from logic.error_utils import show_warning
 from logic.ticker_lookup import get_company_name
 
 
-st.title("株価チャート")
+st.title("③株価チャート")
+st.caption("ローソク足と出来高から、株価の推移を詳しく確認します。")
 
 stock_df = st.session_state.get("stock_price_df")
 ticker = st.session_state.get("selected_ticker")
 
 if stock_df is None or stock_df.empty:
-    show_warning("データが取得されていません。トップ画面で銘柄を選択してください。")
+    show_warning("データが取得されていません。①銘柄・分析条件の設定画面で銘柄を選択してください。")
     st.stop()
 
 st.subheader(f"{get_company_name(ticker)} ローソク足チャート")

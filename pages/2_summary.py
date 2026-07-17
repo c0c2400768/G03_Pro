@@ -12,13 +12,14 @@ from logic.error_utils import show_warning
 from logic.ticker_lookup import get_company_name
 
 
-st.title("サマリー")
+st.title("②株価・指標サマリー")
+st.caption("取得した銘柄の直近の値動きと主要指標を、ひと目で確認できます。")
 
 stock_df = st.session_state.get("stock_price_df")
 ticker = st.session_state.get("selected_ticker")
 
 if stock_df is None or stock_df.empty:
-    show_warning("データが取得されていません。トップ画面で銘柄を選択してください。")
+    show_warning("データが取得されていません。①銘柄・分析条件の設定画面で銘柄を選択してください。")
     st.stop()
 
 latest = stock_df.iloc[-1]

@@ -35,66 +35,69 @@ from logic.error_utils import show_warning
 _STYLE = """
 <style>
 .ds-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
-.ds-card-title { display:flex; align-items:center; gap:10px; font-size:20px; font-weight:700; color:#1f2937; }
-.ds-badge-stance { background:#f3f4f6; color:#374151; padding:4px 12px; border-radius:999px; font-size:13px; }
+.ds-card-title { display:flex; align-items:center; gap:10px; font-size:20px; font-weight:700; color:var(--text-color); }
+.ds-badge-stance { background:rgba(128,128,128,0.15); color:var(--text-color); padding:4px 12px; border-radius:999px; font-size:13px; }
 
-.ds-action-tile { background:#eafaf1; border-radius:12px; padding:16px 20px; margin-bottom:16px; }
-.ds-action-tile-label { font-size:13px; color:#4b5563; margin-bottom:4px; }
-.ds-action-tile-value { font-size:24px; font-weight:700; color:#166534; }
+.ds-action-tile { background:rgba(34,197,94,0.18); border-radius:12px; padding:16px 20px; margin-bottom:16px; }
+.ds-action-tile-label { font-size:13px; color:var(--text-color); margin-bottom:4px; }
+.ds-action-tile-value { font-size:24px; font-weight:700; color:#16a34a; }
 
 .ds-metric-row { display:flex; gap:16px; margin-bottom:16px; }
 .ds-metric-tile { flex:1; border-radius:12px; padding:16px; text-align:center; }
-.ds-metric-tile-label { font-size:12px; color:#4b5563; margin-bottom:6px; }
+.ds-metric-tile-label { font-size:12px; color:var(--text-color); margin-bottom:6px; }
 .ds-metric-tile-value { font-size:22px; font-weight:700; }
 .ds-metric-tile-sub { font-size:13px; font-weight:600; margin-top:2px; }
-.ds-metric-green { background:#eafaf1; }
-.ds-metric-green .ds-metric-tile-value { color:#166534; }
-.ds-metric-blue { background:#eaf2fb; }
-.ds-metric-blue .ds-metric-tile-value { color:#1d4ed8; }
-.ds-metric-amber { background:#fff8e1; }
-.ds-metric-amber .ds-metric-tile-value { color:#92400e; font-size:18px; }
-.ds-metric-amber .ds-metric-tile-sub { color:#92400e; }
+.ds-metric-green { background:rgba(34,197,94,0.18); }
+.ds-metric-green .ds-metric-tile-value { color:#16a34a; }
+.ds-metric-blue { background:rgba(59,130,246,0.18); }
+.ds-metric-blue .ds-metric-tile-value { color:#2563eb; }
+.ds-metric-amber { background:rgba(245,158,11,0.20); }
+.ds-metric-amber .ds-metric-tile-value { color:#b45309; font-size:18px; }
+.ds-metric-amber .ds-metric-tile-sub { color:#b45309; }
+.ds-metric-purple { background:rgba(168,85,247,0.18); }
+.ds-metric-purple .ds-metric-tile-value { color:#7c3aed; font-size:18px; }
+.ds-metric-purple .ds-metric-tile-sub { color:#7c3aed; }
 
-.ds-desc-text { font-size:14px; color:#374151; }
+.ds-desc-text { font-size:14px; color:var(--text-color); }
 
 .ds-table { width:100%; border-collapse:collapse; font-size:14px; }
-.ds-table th { text-align:left; color:#6b7280; font-weight:600; font-size:13px; padding:8px 10px; border-bottom:1px solid #e5e7eb; }
-.ds-table td { padding:10px; border-bottom:1px solid #f3f4f6; vertical-align:middle; color:#1f2937; }
+.ds-table th { text-align:left; color:var(--text-color); font-weight:600; font-size:13px; padding:8px 10px; border-bottom:1px solid #e5e7eb; }
+.ds-table td { padding:10px; border-bottom:1px solid #f3f4f6; vertical-align:middle; color:var(--text-color); }
 .ds-return-pos { color:#16a34a; font-weight:600; }
 .ds-return-neg { color:#dc2626; font-weight:600; }
-.ds-winrate-bar-track { background:#e5e7eb; border-radius:999px; height:6px; width:70px; display:inline-block; vertical-align:middle; margin-right:8px; }
+.ds-winrate-bar-track { background:rgba(128,128,128,0.25); border-radius:999px; height:6px; width:70px; display:inline-block; vertical-align:middle; margin-right:8px; }
 .ds-winrate-bar-fill { background:#22c55e; border-radius:999px; height:6px; display:inline-block; }
 
 .ds-pill { padding:3px 10px; border-radius:999px; font-size:13px; font-weight:600; white-space:nowrap; }
-.ds-pill-risk-低 { background:#dcfce7; color:#15803d; }
-.ds-pill-risk-中 { background:#fef3c7; color:#92400e; }
-.ds-pill-risk-高 { background:#fee2e2; color:#b91c1c; }
-.ds-pill-risk-なし { background:#f3f4f6; color:#6b7280; }
-.ds-pill-rating-recommended { background:#dcfce7; color:#15803d; }
-.ds-pill-rating-considerable { background:#dbeafe; color:#1d4ed8; }
-.ds-pill-rating-not_recommended { background:#f3f4f6; color:#4b5563; }
+.ds-pill-risk-低 { background:rgba(34,197,94,0.18); color:#16a34a; }
+.ds-pill-risk-中 { background:rgba(245,158,11,0.20); color:#b45309; }
+.ds-pill-risk-高 { background:rgba(239,68,68,0.18); color:#dc2626; }
+.ds-pill-risk-なし { background:rgba(128,128,128,0.15); color:var(--text-color); }
+.ds-pill-rating-recommended { background:rgba(34,197,94,0.18); color:#16a34a; }
+.ds-pill-rating-considerable { background:rgba(59,130,246,0.18); color:#2563eb; }
+.ds-pill-rating-not_recommended { background:rgba(128,128,128,0.15); color:var(--text-color); }
 
 /* margin-bottom:16pxは、st.markdownのラッパー要素(stMarkdownContainer)がst側で
    margin-bottom:-16pxを持つため、その分を打ち消してst.container(border=True)の
    下端とカードの下端を揃えるためのもの（打ち消さないとカードが外枠の下端をはみ出す）。 */
 .ds-angle-row { display:flex; align-items:stretch; gap:16px; margin-bottom:16px; }
 .ds-angle-card { flex:1; border-radius:12px; padding:16px; }
-.ds-angle-green { background:#f0fdf4; }
-.ds-angle-blue { background:#eff6ff; }
-.ds-angle-purple { background:#faf5ff; }
-.ds-angle-title { font-size:13px; font-weight:700; margin-bottom:8px; color:#1f2937; }
-.ds-angle-action { font-size:15px; font-weight:700; margin-bottom:6px; color:#1f2937; }
-.ds-angle-desc { font-size:13px; color:#4b5563; }
+.ds-angle-green { background:rgba(34,197,94,0.14); }
+.ds-angle-blue { background:rgba(59,130,246,0.14); }
+.ds-angle-purple { background:rgba(168,85,247,0.14); }
+.ds-angle-title { font-size:13px; font-weight:700; margin-bottom:8px; color:var(--text-color); }
+.ds-angle-action { font-size:15px; font-weight:700; margin-bottom:6px; color:var(--text-color); }
+.ds-angle-desc { font-size:13px; color:var(--text-color); }
 
-.ds-footer { background:#fff8e1; border-radius:12px; padding:16px 20px; font-size:13px; color:#78350f; }
+.ds-footer { background:rgba(245,158,11,0.18); border-radius:12px; padding:16px 20px; font-size:13px; color:#b45309; }
 
 .ds-stat-header { display:flex; align-items:flex-start; gap:14px; margin-bottom:16px; }
 .ds-stat-icon { width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0; }
-.ds-stat-icon-green { background:#dcfce7; }
-.ds-stat-icon-blue { background:#dbeafe; }
-.ds-stat-title { font-size:16px; font-weight:700; color:#1f2937; margin-bottom:4px; }
-.ds-stat-desc { font-size:13px; color:#6b7280; }
-.ds-stat-note { font-size:12px; color:#6b7280; margin:4px 0 12px 0; }
+.ds-stat-icon-green { background:rgba(34,197,94,0.18); }
+.ds-stat-icon-blue { background:rgba(59,130,246,0.18); }
+.ds-stat-title { font-size:16px; font-weight:700; color:var(--text-color); margin-bottom:4px; }
+.ds-stat-desc { font-size:13px; color:var(--text-color); }
+.ds-stat-note { font-size:12px; color:var(--text-color); margin:4px 0 12px 0; }
 
 .ds-th-info { cursor:help; color:#9ca3af; font-size:11px; margin-left:2px; }
 </style>
@@ -114,7 +117,7 @@ _COMPARISON_COLUMN_TOOLTIPS = {
     "平均リターン": "過去の類似局面を起点に、この投資行動を取った場合のリターンの平均値です。",
     "勝率": "過去の類似局面のうち、リターンがプラスになった割合です。",
     "リスク": (
-        "この銘柄の値動きの大きさ（HV）を基準にした、最大ドローダウンの相対的な大きさです"
+        "この銘柄の値動きの大きさ（HV）を基準にした、最大含み損率の相対的な大きさです"
         "（低/中/高）。HVが算出できない場合は固定の閾値（3%/6%）で判定します。"
     ),
     "評価": (
@@ -329,8 +332,12 @@ def render_unrealized_pl_card(purchase_price: float | None, current_price: float
         )
 
 
-def render_comparison_table(ranked_df: pd.DataFrame) -> None:
-    """投資行動の比較表（順位・投資行動・平均リターン・勝率・リスク・評価）を表示する。"""
+def render_comparison_table(ranked_df: pd.DataFrame, excluded_df: pd.DataFrame | None = None) -> None:
+    """投資行動の比較表（順位・投資行動・平均リターン・勝率・リスク・評価）を表示する。
+
+    excluded_df: サンプル数不足（logic.decision_rating.filter_insufficient_sample_rows参照）で
+        比較対象から除外された(Action, Horizon)行。Noneまたは空の場合は注記を表示しない。
+    """
     with st.container(border=True):
         st.markdown(
             '<div class="ds-card-header">'
@@ -383,6 +390,17 @@ def render_comparison_table(ranked_df: pd.DataFrame) -> None:
                 "他の投資行動のような過去の類似局面に基づく予測比較の対象ではないため、"
                 "順位・評価（ランキング）の対象外とし「－」で表示しています。現在の含み損益は"
                 '上部の「📌 現在の含み損益」カードをご覧ください。</div>',
+                unsafe_allow_html=True,
+            )
+
+        if excluded_df is not None and not excluded_df.empty:
+            excluded_items = "、".join(
+                f"「{_action_label(row)}」（{int(row['SampleSize'])}件）"
+                for _, row in excluded_df.iterrows()
+            )
+            st.markdown(
+                f'<div class="ds-stat-note">⚠️ {excluded_items}はサンプル不足のため、'
+                "比較対象から除外しています。</div>",
                 unsafe_allow_html=True,
             )
 

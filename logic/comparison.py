@@ -11,10 +11,13 @@ interface.md（確定版）6-1〜6-7の実装規約に準拠。
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "data_j.xls"
 
@@ -47,11 +50,20 @@ def load_listed_stocks() -> pd.DataFrame:
     ETF・REIT等の指数連動商品や業種未設定の銘柄は除外する。
     読み込みに失敗した場合・想定した列が無い場合は空dfを返す（例外は投げない）。
     他モジュール（logic/ticker_lookup.py）からも銘柄マスタとして共有される。
+
+    data/data_j.xlsについて：JPX（日本取引所グループ）公式サイトが公開している
+    東証上場銘柄一覧のExcelファイル。JPXが定期的に（概ね月次で）内容を更新するため、
+    本ファイルも継続的に古くなっていく（新規上場・上場廃止・業種区分変更等が反映
+    されない）。更新する場合は、JPX公式サイト（東証上場銘柄一覧のページ）から
+    最新版のExcelファイルをダウンロードし、本ファイル（data/data_j.xls）と
+    同じ列構成のまま差し替えればよい。列名・シート構成が変わっていないか、
+    差し替え後にload_listed_stocks()が空dfを返していないか確認すること。
     """
     columns = ["コード", "銘柄名", "33業種区分", "規模コード"]
     try:
         df = pd.read_excel(DATA_PATH)
     except Exception:
+        logger.exception("data_j.xlsの読み込みに失敗しました（path=%s）", DATA_PATH)
         return pd.DataFrame(columns=columns)
 
     required = {"コード", "銘柄名", "市場・商品区分", "33業種区分", "規模コード"}

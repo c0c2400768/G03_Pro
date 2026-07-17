@@ -7,11 +7,13 @@ import streamlit as st
 from logic.csv_export import build_decision_support_export
 from logic.decision_rating import (
     add_action_ratings,
+    filter_insufficient_sample_rows,
+    insufficient_sample_rows,
     judge_sector_validity,
     rank_rated_actions,
     select_recommended_action,
 )
-from logic.demo_trade import latest_close_price
+from logic.demo_trade import SELL_ACTION, latest_close_price
 from logic.error_utils import show_warning
 from logic.indicators import calc_hv
 from logic.validation import run_peer_universe_validation, run_single_stock_validation
@@ -25,8 +27,8 @@ from pages._decision_support_view import (
 )
 from pages._validation_view import render_validation_detail_section
 
-st.title("補助判断")
-st.caption("過去の類似ケースと比較して、最適な投資行動を見つけるための分析ページです。")
+st.title("⑦投資判断サポート")
+st.caption("シミュレーションと統計的な検証結果をもとに、投資行動の候補を総合的に比較します。")
 
 inject_styles()
 
@@ -37,16 +39,36 @@ st.warning(
 )
 
 if "demo_trade_result_df" not in st.session_state:
-    show_warning("分析結果がありません。先に「デモトレード結果」画面を開いて計算を実行してください。")
+    show_warning("分析結果がありません。先に⑥シミュレーション結果画面を開いて計算を実行してください。")
     st.stop()
 
-result_df = st.session_state.get("demo_trade_result_df")
+demo_trade_entry = st.session_state.get("demo_trade_result_df")
+result_df = demo_trade_entry.get("data") if isinstance(demo_trade_entry, dict) else None
 
 if result_df is None or result_df.empty:
     show_warning(
         "デモトレードが実行できなかったため、補助判断の分析もできません。"
-        "「過去類似局面」画面で条件を見直し（過去データ不足の場合は分析期間を延ばす、"
+        "⑤似た相場を探す画面で条件を見直し（過去データ不足の場合は分析期間を延ばす、"
         "許容幅の問題の場合は許容幅を広げる）、再度お試しください。"
+    )
+    st.stop()
+
+# 銘柄・期間・立場を変更した後、⑥を経由せず直接この画面を開いた場合、以前の分析条件の
+# デモトレード結果がそのまま表示されてしまう（stale表示）ため、生成時点の分析条件タグと
+# 現在の分析条件タグを照合する。
+if demo_trade_entry.get("tag") != st.session_state.get("analysis_condition_tag"):
+    show_warning("分析条件（銘柄・期間・立場等）が変更されています。⑥シミュレーション結果画面を開いて再実行してください。")
+    st.stop()
+
+# --- サンプル数（SampleSize）が少ない行動を比較・判定の対象から除外する安全装置 ---------
+# 除外された行動はrender_comparison_table側で注記表示する（excluded_sample_df）。
+excluded_sample_df = insufficient_sample_rows(result_df)
+result_df = filter_insufficient_sample_rows(result_df)
+
+if result_df[result_df["Action"] != SELL_ACTION].empty:
+    show_warning(
+        "類似局面のサンプル数が少なく、統計的に信頼できる投資行動がありませんでした。"
+        "⑤似た相場を探す画面で許容幅を広げるか、分析期間を延ばして再度お試しください。"
     )
     st.stop()
 
@@ -64,6 +86,8 @@ price_df = st.session_state.get("stock_price_df")
 ticker = st.session_state.get("selected_ticker")
 period = st.session_state.get("selected_period", "3年")
 peer_fetch_period = "10年" if period == "任意" else period
+custom_start = st.session_state.get("custom_start")
+custom_end = st.session_state.get("custom_end")
 
 single_stock_result = None
 peer_result = None
@@ -72,7 +96,11 @@ if price_df is not None and not price_df.empty and ticker:
     # 引数に取らず結果もstanceに依存しないため、キャッシュキーには含めない
     # （含めると「すでに保有している」⇄「これから購入する」の切り替えのたびに
     # 無駄な再計算が発生してしまう）。
-    validation_key = (ticker, period)
+    # period=="任意"の場合、custom_start/custom_endが変わっても(ticker, period)だけでは
+    # 同じキーとみなされ古い検証結果が返り続けてしまうため、custom_start/custom_endも
+    # キーに含める（period!="任意"の場合は常にNoneなので、既存動作と変わらない）。
+    # 許容幅はキーに含めない（③の通り検証は許容幅を反映しないため）。
+    validation_key = (ticker, period, custom_start, custom_end)
     if (
         st.session_state.get("validation_cache_key") == validation_key
         and "validation_cache_value" in st.session_state
@@ -148,7 +176,7 @@ if stance == "すでに保有している":
         render_unrealized_pl_card(purchase_price, latest_close_price(price_df))
 
 # --- 投資行動の比較表 --------------------------------------------------------
-render_comparison_table(ranked_df)
+render_comparison_table(ranked_df, excluded_sample_df)
 
 # --- 判断の切り口 ------------------------------------------------------------
 render_decision_angles(ranked_df)

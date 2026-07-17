@@ -15,13 +15,13 @@ st.set_page_config(
 )
 
 pages = [
-    st.Page("pages/1_home.py", title="トップ"),
-    st.Page("pages/2_summary.py", title="サマリー"),
-    st.Page("pages/3_stock_chart.py", title="株価チャート"),
-    st.Page("pages/4_multi_indicator_analysis.py", title="複数指標分析"),
-    st.Page("pages/5_similar_market_phases.py", title="過去類似局面"),
-    st.Page("pages/6_demo_trading_results.py", title="デモトレード結果"),
-    st.Page("pages/7_decision_support.py", title="補助判断資料"),
+    st.Page("pages/1_home.py", title="①銘柄・分析条件の設定", icon="🔧"),
+    st.Page("pages/2_summary.py", title="②株価・指標サマリー", icon="📋"),
+    st.Page("pages/3_stock_chart.py", title="③株価チャート", icon="🕯️"),
+    st.Page("pages/4_multi_indicator_analysis.py", title="④指標分析", icon="🧮"),
+    st.Page("pages/5_similar_market_phases.py", title="⑤似た相場を探す", icon="🔍"),
+    st.Page("pages/6_demo_trading_results.py", title="⑥シミュレーション結果", icon="🎯"),
+    st.Page("pages/7_decision_support.py", title="⑦投資判断サポート", icon="🧭"),
 ]
 
 nav = st.navigation(pages)

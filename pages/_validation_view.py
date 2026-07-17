@@ -46,9 +46,9 @@ def hit_rate_display(result: dict | None) -> str:
 
 
 def _stat_metric_row_html(result: dict) -> str:
-    """的中率・平均リターン・p値の3項目をカード内の指標タイルとして表示するHTMLを返す。
+    """的中率・平均リターン・戦略リターンのp値・的中率のp値の4項目を指標タイルとして表示するHTMLを返す。
 
-    p値には目標サンプル数未達の場合「参考値」の注記を残す。
+    戦略リターンのp値・的中率のp値には、目標サンプル数未達の場合「参考値」の注記を残す。
     """
     if result["insufficient_sample"] and result["hit_rate"] is None:
         return '<div class="ds-stat-note">⚠️ 検証に必要なデータが不足しているため、統計検証できませんでした。</div>'
@@ -64,27 +64,50 @@ def _stat_metric_row_html(result: dict) -> str:
         f'<div class="ds-metric-tile-value">{result["avg_return"]:+.2%}</div></div>'
     )
 
-    note = None
+    notes = []
     if result["insufficient_sample"]:
-        p_value_label, p_value_text = "p値", "算出不可"
-        note = "⚠️ サンプル不足のため統計検証不可（帰無仮説の検定にはサンプル数5以上が必要です）"
-    elif result["p_value"] is None:
-        p_value_label, p_value_text = "p値", "算出不可"
-    elif result["p_value_is_reference"]:
-        p_value_label, p_value_text = "p値（参考値）", f'{result["p_value"]:.3f}'
-        note = "ℹ️ 目標サンプル数に未達のため、p値は参考値です"
+        p_value_label, p_value_text = "p値（戦略リターン）", "算出不可"
+        hit_p_value_label, hit_p_value_text = "p値（的中率）", "算出不可"
+        notes.append("⚠️ サンプル不足のため統計検証不可（帰無仮説の検定にはサンプル数5以上が必要です）")
     else:
-        p_value_label, p_value_text = "p値", f'{result["p_value"]:.3f}'
+        if result["p_value"] is None:
+            p_value_label, p_value_text = "p値（戦略リターン）", "算出不可"
+        elif result["p_value_is_reference"]:
+            p_value_label, p_value_text = "p値（戦略リターン・参考値）", f'{result["p_value"]:.3f}'
+        else:
+            p_value_label, p_value_text = "p値（戦略リターン）", f'{result["p_value"]:.3f}'
+
+        if result.get("hit_rate_p_value") is None:
+            hit_p_value_label, hit_p_value_text = "p値（的中率）", "算出不可"
+        elif result["p_value_is_reference"]:
+            hit_p_value_label, hit_p_value_text = "p値（的中率・参考値）", f'{result["hit_rate_p_value"]:.3f}'
+        else:
+            hit_p_value_label, hit_p_value_text = "p値（的中率）", f'{result["hit_rate_p_value"]:.3f}'
+
+        if result["p_value_is_reference"]:
+            notes.append("ℹ️ 目標サンプル数に未達のため、p値は参考値です")
 
     p_value_html = (
         '<div class="ds-metric-tile ds-metric-amber">'
         f'<div class="ds-metric-tile-label">{p_value_label}</div>'
         f'<div class="ds-metric-tile-value">{p_value_text}</div></div>'
     )
+    hit_p_value_html = (
+        '<div class="ds-metric-tile ds-metric-purple">'
+        f'<div class="ds-metric-tile-label">{hit_p_value_label}</div>'
+        f'<div class="ds-metric-tile-value">{hit_p_value_text}</div></div>'
+    )
 
-    row_html = f'<div class="ds-metric-row">{hit_rate_html}{avg_return_html}{p_value_html}</div>'
-    note_html = f'<div class="ds-stat-note">{note}</div>' if note else ""
-    return row_html + note_html
+    # それぞれのp値が何を検定した値なのかを明記する注記（ユーザーが誤解しないように）。
+    notes.append(
+        "ℹ️ 「p値（戦略リターン）」は、予測方向に従って売買した場合の戦略リターンが0と異なるかを"
+        "検定したものです。「p値（的中率）」は、方向の的中率が偶然（50%）と異なるかを"
+        "検定したものです。"
+    )
+
+    row_html = f'<div class="ds-metric-row">{hit_rate_html}{avg_return_html}{p_value_html}{hit_p_value_html}</div>'
+    notes_html = "".join(f'<div class="ds-stat-note">{note}</div>' for note in notes)
+    return row_html + notes_html
 
 
 def render_single_stock_validation_card(result: dict) -> None:
@@ -181,6 +204,19 @@ def render_validation_detail_section(single_stock_result: dict, peer_result: dic
     """
     st.markdown("## 統計検証（walk-forward検証）")
     st.caption("偶然の結果ではなく、再現性があるかを検証するために、過去の複数時点に遡って検証しています。")
+    # 本検証が⑤画面の許容幅設定を使わない理由、および全行動の判定にbuy_todayの検証結果を
+    # 代表値として使っている旨を、ユーザーの誤解を防ぐためあらかじめ明記する
+    # （判定ロジック・検証ロジック自体は変更しない、表示専用の注記）。
+    st.caption(
+        "本検証は、ユーザーが⑤画面で設定した許容幅ではなく、固定の標準的な許容幅を用いて"
+        "実施しています。これは、条件によって「たまたま」検証をパスするのではなく、"
+        "手法自体の頑健性・再現性を確認するためです。"
+    )
+    st.caption(
+        "本検証は、新規購入（buy_today）を対象に行った方向予測の検証です。保有継続・"
+        "一部売却・損切りなど他の投資行動についても、この検証結果を代表値として判定の"
+        "裏付けに使用しています。"
+    )
 
     render_single_stock_validation_card(single_stock_result)
     render_peer_validation_card(peer_result)

@@ -29,7 +29,7 @@ _EXPORT_COLUMN_LABELS = {
     "AvgReturnLabel": "平均リターン",
     "WinRateLabel": "勝率",
     "MaxLossLabel": "最大損失",
-    "MaxDrawdownLabel": "最大ドローダウン",
+    "MaxDrawdownLabel": "最大含み損率",
     "AvgHoldDaysLabel": "平均保有日数",
     "SampleSizeLabel": "検証件数",
     "RiskLevel": "リスク",

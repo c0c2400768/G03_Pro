@@ -45,8 +45,6 @@ from logic.error_utils import show_error, show_warning
 from logic.ticker_lookup import get_company_name
 
 
-st.set_page_config(page_title="複数指標分析", page_icon="🧮", layout="wide")
-
 # =====================================================================
 # 状態判定（このファイル固有のUI用ロジック。logic/には置かない＝画面表示の
 # 都合であり、他担当が使う共有インターフェースではないため）
@@ -161,13 +159,13 @@ normalized_stock_df = st.session_state.get("normalized_stock_df")
 normalized_index_df = st.session_state.get("normalized_index_df")
 ticker = st.session_state.get("selected_ticker", "―")
 
-st.title("🧮 複数指標分析詳細画面")
+st.title("④指標分析")
+st.caption("RSIやボリンジャーバンドなどを詳しく確認し、現在の相場状態を分析します。")
+st.caption(f"対象銘柄：{get_company_name(ticker)}")
 
 if price_df is None or price_df.empty:
     show_error("株価データがありません。トップ画面で銘柄を選択し、分析を実行してください。")
     st.stop()
-
-st.caption(f"対象銘柄：{get_company_name(ticker)}")
 
 # =====================================================================
 # 指標の計算（1つ失敗しても他は続行する）

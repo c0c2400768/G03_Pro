@@ -11,9 +11,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 # 取得失敗時に返す空DataFrameの列定義（呼び出し元は df.empty でチェックする）
 STOCK_COLUMNS: list[str] = ["Date", "Open", "High", "Low", "Close", "Volume"]
@@ -84,11 +88,12 @@ def get_stock_data(ticker: str, period: str) -> pd.DataFrame:
     """銘柄コードと期間から株価df（Date, Open, High, Low, Close, Volume）を返す。失敗時は空df。"""
     try:
         history = yf.Ticker(ticker).history(
-            period=_to_yf_period(period), auto_adjust=False
+            period=_to_yf_period(period), auto_adjust=True
         )
         return _history_to_df(history, STOCK_COLUMNS)
     except Exception:
         # 銘柄コード不正・通信エラー等。例外は投げず空dfを返す（6-2）
+        logger.exception("株価データの取得に失敗しました（ticker=%s, period=%s）", ticker, period)
         return _empty_df(STOCK_COLUMNS)
 
 
@@ -97,10 +102,11 @@ def get_index_data(period: str) -> pd.DataFrame:
     """期間を指定して日経平均（^N225）のdf（Date, Close）を返す。失敗時は空df。"""
     try:
         history = yf.Ticker(NIKKEI_TICKER).history(
-            period=_to_yf_period(period), auto_adjust=False
+            period=_to_yf_period(period), auto_adjust=True
         )
         return _history_to_df(history, INDEX_COLUMNS)
     except Exception:
+        logger.exception("日経平均データの取得に失敗しました（period=%s）", period)
         return _empty_df(INDEX_COLUMNS)
 
 

@@ -19,11 +19,11 @@ from logic.comparison import select_comparison_targets
 from logic.data_fetch import get_index_data, get_stock_data, normalize_to_100
 from logic.demo_trade import resolve_entry_price
 from logic.error_utils import show_error, show_warning
-from logic.ticker_lookup import get_company_name, list_tickers
+from logic.ticker_lookup import get_company_name, list_tickers, search_tickers
 
 
-st.set_page_config(page_title="トップ | 株価分析", layout="wide")
-st.title("トップ：銘柄選択とデータ取得")
+st.title("①銘柄・分析条件の設定")
+st.caption("分析したい銘柄や期間、保有状況を設定して、株価データを取得します。")
 
 col_ticker, col_period, col_stance = st.columns([1.2, 1, 1])
 
@@ -33,18 +33,30 @@ with col_ticker:
         show_error("銘柄マスタ（data/data_j.xls）を読み込めませんでした。")
         st.stop()
 
-    ticker_options = [t["ticker"] for t in tickers]
-    ticker_labels = {t["ticker"]: f"{t['name']}（{t['code']}）" for t in tickers}
     default_ticker = st.session_state.get("selected_ticker", "7203.T")
-    default_index = ticker_options.index(default_ticker) if default_ticker in ticker_options else 0
+    default_name = next((t["name"] for t in tickers if t["ticker"] == default_ticker), "")
 
-    ticker = st.selectbox(
-        "銘柄選択（銘柄名またはコードで検索）",
-        options=ticker_options,
-        index=default_index,
-        format_func=lambda t: ticker_labels.get(t, t),
-        help="銘柄名の一部またはコードを入力すると絞り込めます",
+    search_keyword = st.text_input(
+        "銘柄検索（銘柄名またはコードで検索）",
+        value=default_name,
+        help="全角半角・大文字小文字を問わず、銘柄名の一部またはコードで絞り込めます",
     )
+    matched_tickers = search_tickers(search_keyword)
+
+    ticker = None
+    if not matched_tickers:
+        show_error("該当する銘柄が見つかりませんでした。検索キーワードを見直してください。")
+    else:
+        ticker_options = [t["ticker"] for t in matched_tickers]
+        ticker_labels = {t["ticker"]: f"{t['name']}（{t['code']}）" for t in matched_tickers}
+        default_index = ticker_options.index(default_ticker) if default_ticker in ticker_options else 0
+
+        ticker = st.selectbox(
+            "候補から選択",
+            options=ticker_options,
+            index=default_index,
+            format_func=lambda t: ticker_labels.get(t, t),
+        )
 
 with col_period:
     period_options = ["3年", "5年", "10年", "任意"]
@@ -66,19 +78,28 @@ with col_stance:
 
     purchase_date = None
     if stance == "すでに保有している":
+        # st.navigation構成のマルチページでは、ウィジェットにkeyを指定するだけではページ離脱後に
+        # 値が保持されない（そのページのスクリプトが実行されない間にウィジェットの状態がクリアされる
+        # ため）。そのためウィジェットのkeyとは別に、通常のsession_stateの値として入力中の購入日を
+        # 保持し、毎回そこから初期値を読み書きする（pages/5_similar_market_phases.pyの許容幅
+        # スライダーと同じパターン）。
         # 取得価格はユーザーごとに異なるため、購入日から都度取得する（固定値は持たない）
+        st.session_state.setdefault("purchase_date_input", None)
         purchase_date = st.date_input(
             "購入日",
-            value=None,
+            value=st.session_state["purchase_date_input"],
             max_value=date.today(),
             help="保有株を購入した日付。この日の終値を取得価格として使用します。",
         )
+        st.session_state["purchase_date_input"] = purchase_date
 
 st.divider()
 
 if st.button("分析開始", type="primary"):
     ticker_clean = ticker
-    if period_choice == "任意" and custom_start >= custom_end:
+    if ticker_clean is None:
+        show_error("銘柄が選択されていません。検索キーワードを見直して銘柄を選択してください。")
+    elif period_choice == "任意" and custom_start >= custom_end:
         show_error("開始日は終了日より前の日付を指定してください。")
     elif stance == "すでに保有している" and purchase_date is None:
         show_error("「すでに保有している」を選択した場合は、購入日を入力してください。")
@@ -123,10 +144,18 @@ if st.button("分析開始", type="primary"):
         else:
             st.session_state["selected_ticker"] = ticker_clean
             st.session_state["selected_period"] = period_choice
+            st.session_state["custom_start"] = custom_start
+            st.session_state["custom_end"] = custom_end
             st.session_state["stock_price_df"] = stock_df
             st.session_state["index_price_df"] = index_df
             st.session_state["investment_stance"] = stance
             st.session_state["analysis_started"] = True
+            # 分析条件（銘柄・期間・立場）のタグ。⑥⑦画面が、自分の依存データ（⑤の類似局面・
+            # ⑥のデモトレード結果）がこのタグ生成時点のものかを照合し、stale（別条件の結果を
+            # 使い回した）表示を防ぐために使う（許容幅は含めない。検証は許容幅を反映しないため）。
+            st.session_state["analysis_condition_tag"] = (
+                ticker_clean, period_choice, custom_start, custom_end, stance,
+            )
 
             if stance == "すでに保有している":
                 purchase_price = resolve_entry_price(stock_df, str(purchase_date))

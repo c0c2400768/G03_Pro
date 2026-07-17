@@ -200,6 +200,63 @@ def apply_hit_rate_floor(
     return rating
 
 
+# デモトレード結果（calc_demo_tradeの出力）のSampleSize（1つの(Action, Horizon)あたりの
+# 有効な類似局面件数）に基づく安全装置の閾値。judge_sector_validityのSECTOR_VALIDITY_MIN_SAMPLE
+# （業種横断検証専用の閾値）とは無関係の別の閾値のため、混同しないよう名前を明確に分けている。
+DEMO_TRADE_MIN_SAMPLE_SIZE = 5  # これ未満の(Action, Horizon)は比較・判定の対象から除外する（filter_insufficient_sample_rows）
+DEMO_TRADE_RECOMMENDED_MIN_SAMPLE_SIZE = 20  # これ未満は「推奨」に到達できないようキャップする（apply_sample_size_cap）
+
+
+def apply_sample_size_cap(rating: str, sample_size: float | int | None) -> str:
+    """デモトレードのサンプル数（SampleSize）が少ない場合、「推奨」を「検討可」に抑える安全装置。
+
+    apply_significance_cap・apply_hit_rate_floorと同じく独立した安全装置の1つ。
+    SampleSizeがDEMO_TRADE_RECOMMENDED_MIN_SAMPLE_SIZE未満の場合、Ratingが「推奨」であれば
+    「検討可」に格下げする（DEMO_TRADE_MIN_SAMPLE_SIZE未満の行はfilter_insufficient_sample_rows
+    により呼び出し元で比較対象からそもそも除外されている想定）。
+    sample_sizeがNone/NaN（売却・見送り等サンプル数の概念が無い行動、または未指定）の場合は
+    対象外としてratingをそのまま返す。
+    """
+    if rating != RATING_RECOMMENDED:
+        return rating
+    if sample_size is None or pd.isna(sample_size):
+        return rating
+    if sample_size < DEMO_TRADE_RECOMMENDED_MIN_SAMPLE_SIZE:
+        return RATING_CONSIDERABLE
+    return rating
+
+
+def _sufficient_sample_mask(result_df: pd.DataFrame) -> pd.Series:
+    """SampleSizeがDEMO_TRADE_MIN_SAMPLE_SIZE以上か、売却（サンプル数の概念が無い）ならTrue。"""
+    is_sell = result_df["Action"] == SELL_ACTION
+    has_enough_sample = result_df["SampleSize"] >= DEMO_TRADE_MIN_SAMPLE_SIZE
+    return is_sell | has_enough_sample
+
+
+def filter_insufficient_sample_rows(result_df: pd.DataFrame) -> pd.DataFrame:
+    """SampleSizeがDEMO_TRADE_MIN_SAMPLE_SIZE未満の(Action, Horizon)行を除外して返す。
+
+    類似局面が極端に少ない行動は、結果（AvgReturn・WinRate等）が統計的に信頼できないため、
+    判定・比較表の対象から外す。「売却」（SampleSize=None、そもそもサンプル数の概念が無い
+    確定値）は対象外（除外しない）。SampleSize列が無い場合はフィルタせずそのまま返す
+    （例外は投げない）。
+    """
+    if result_df is None or result_df.empty or "SampleSize" not in result_df.columns:
+        return result_df
+    return result_df[_sufficient_sample_mask(result_df)].reset_index(drop=True)
+
+
+def insufficient_sample_rows(result_df: pd.DataFrame) -> pd.DataFrame:
+    """filter_insufficient_sample_rowsで除外される行（サンプル不足の行）だけを返す。
+
+    比較表に「どの行動がサンプル不足で除外されたか」を注記表示するために使う
+    （pages/_decision_support_view.py参照）。
+    """
+    if result_df is None or result_df.empty or "SampleSize" not in result_df.columns:
+        return result_df if result_df is not None else pd.DataFrame()
+    return result_df[~_sufficient_sample_mask(result_df)].reset_index(drop=True)
+
+
 def rate_action_row(
     action: str,
     avg_return: float,
@@ -213,6 +270,7 @@ def rate_action_row(
     single_stock_p_value_is_reference: bool,
     single_stock_insufficient_sample: bool,
     peer_avg_return: float | None,
+    sample_size: float | int | None = None,
 ) -> dict:
     """1つの(Action, Horizon)行に対する判定結果（RiskLevel, Score, Rating）を返す。
 
@@ -221,6 +279,10 @@ def rate_action_row(
     action=="sell"（売却）も、購入価格と現在値から一意に決まる確定値であり予測分布を
     前提にした採点にはなじまないため、同様に採点対象外として固定の判定を返す
     （skipとは区別できるよう、RiskLevel/RatingはSELL_FIXED_*の別の値を使う）。
+
+    sample_size: この(Action, Horizon)のSampleSize（有効な類似局面件数）。
+        apply_sample_size_cap（サンプル数が少ない場合「推奨」を「検討可」に抑える安全装置）に
+        使う。未指定（None）の場合はキャップを適用しない。
     """
     if action == SKIP_ACTION:
         return {"RiskLevel": SKIP_FIXED_RISK_LEVEL, "Score": None, "Rating": SKIP_FIXED_RATING}
@@ -237,6 +299,7 @@ def rate_action_row(
         peer_avg_return,
     )
     rating = apply_hit_rate_floor(rating, single_stock_hit_rate, single_stock_insufficient_sample)
+    rating = apply_sample_size_cap(rating, sample_size)
     return {"RiskLevel": risk_level(max_drawdown, hv, horizon), "Score": score, "Rating": rating}
 
 
@@ -269,7 +332,63 @@ def add_action_ratings(
         rate_action_row(
             row["Action"], row["AvgReturn"], row["WinRate"], row["MaxDrawdown"], row.get("Horizon"), hv,
             single_stock_hit_rate, single_stock_avg_return, single_stock_p_value, single_stock_p_value_is_reference,
-            single_stock_insufficient_sample, peer_avg_return,
+            single_stock_insufficient_sample, peer_avg_return, row.get("SampleSize"),
+        )
+        for _, row in df.iterrows()
+    ]
+    df["RiskLevel"] = [r["RiskLevel"] for r in ratings]
+    df["Score"] = [r["Score"] for r in ratings]
+    df["Rating"] = [r["Rating"] for r in ratings]
+    return df
+
+
+def rate_action_row_without_validation(
+    action: str,
+    avg_return: float,
+    win_rate: float,
+    max_drawdown: float,
+    horizon: float | None,
+    hv: float | None,
+    sample_size: float | int | None = None,
+) -> dict:
+    """統計検証（単体銘柄検証・業種横断検証）を経由しない、簡易的な(Action, Horizon)判定結果を返す。
+
+    pages/6_demo_trading_results.py（デモトレード結果画面）のグラフ色分け・並び順専用。
+    この画面は⑦投資判断サポートで行うwalk-forward検証を実行しないため、その結果に依存する
+    apply_significance_cap・apply_hit_rate_floorは適用できない（適用対象データが無いため。
+    ダミー値を渡すと、両関数とも「検証未実施」を「検証の結果、支持されなかった」と誤って
+    扱ってしまい、常に非推奨側へ倒れてしまう）。sample_size（calc_demo_trade自身の出力である
+    SampleSize列）だけを根拠とするapply_sample_size_capは、この画面にあるデータのみで
+    完結するため適用する。
+    そのため、この関数が返すRatingは⑦の最終的なRating（統計的安全装置を全て適用した後の値）
+    とは異なる場合がある（rate_action_row参照）。
+    """
+    if action == SKIP_ACTION:
+        return {"RiskLevel": SKIP_FIXED_RISK_LEVEL, "Score": None, "Rating": SKIP_FIXED_RATING}
+    if action == SELL_ACTION:
+        return {"RiskLevel": SELL_FIXED_RISK_LEVEL, "Score": None, "Rating": SELL_FIXED_RATING}
+
+    score = compute_score(avg_return, win_rate, max_drawdown, hv, horizon)
+    rating = apply_sample_size_cap(score_to_rating(score), sample_size)
+    return {"RiskLevel": risk_level(max_drawdown, hv, horizon), "Score": score, "Rating": rating}
+
+
+def add_action_ratings_without_validation(result_df: pd.DataFrame, hv: float | None) -> pd.DataFrame:
+    """デモトレード結果df（calc_demo_tradeの出力）に、統計検証を経由しない簡易的な
+    RiskLevel, Score, Rating列を追加して返す（rate_action_row_without_validation参照）。
+
+    add_action_ratingsの簡易版。既存のresult_dfの行・列構成は変更せず、末尾に判定結果の
+    列を追加するのみ。不正な入力の場合は空のdf（RATING_COLUMNSのみ）を返す（例外は投げない）。
+    """
+    required = {"Action", "AvgReturn", "WinRate", "MaxDrawdown"}
+    if result_df is None or result_df.empty or not required.issubset(result_df.columns):
+        return pd.DataFrame(columns=RATING_COLUMNS)
+
+    df = result_df.reset_index(drop=True).copy()
+    ratings = [
+        rate_action_row_without_validation(
+            row["Action"], row["AvgReturn"], row["WinRate"], row["MaxDrawdown"], row.get("Horizon"), hv,
+            row.get("SampleSize"),
         )
         for _, row in df.iterrows()
     ]
@@ -315,10 +434,16 @@ def rank_rated_actions(rated_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def select_recommended_action(ranked_df: pd.DataFrame) -> pd.Series | None:
-    """比較表の先頭に出す「おすすめ行動」を1行選ぶ（見送りは対象外）。該当なしはNone。"""
+    """比較表の先頭に出す「おすすめ行動」を1行選ぶ（見送り・売却は対象外）。該当なしはNone。
+
+    売却（SELL_ACTION）はrank_rated_actions()と同様に採点対象外のため候補から除外する。
+    除外しないと、他の行動が全てスキップされ（similar_dfが極端に少ない場合等）result_dfに
+    売却の1行しか残らないケースで、WinRate等がNoneの売却行がそのまま「おすすめ行動」として
+    返ってしまい、呼び出し元（render_conclusion_card）でのフォーマット時にTypeErrorになる。
+    """
     if ranked_df is None or ranked_df.empty:
         return None
-    candidates = ranked_df[ranked_df["Action"] != SKIP_ACTION]
+    candidates = ranked_df[~ranked_df["Action"].isin([SKIP_ACTION, SELL_ACTION])]
     if candidates.empty:
         return None
     return candidates.iloc[0]
